@@ -1,7 +1,7 @@
 name: CI
 
-# fmt + clippy + rustdoc + typos, the test suite, an MSRV build, and a
-# supply-chain audit. Ported from scratchsmith, with Lodger's differences:
+# fmt + clippy + rustdoc + typos, the test suite, an MSRV build, coverage with a
+# line floor, and a supply-chain audit. Ported from scratchsmith, with Lodger's differences:
 # every cargo job installs libvirt-dev (the virt crate links libvirt), the
 # toolchain comes from rust-toolchain.toml, and there is no musl build.
 # A single aggregator job, `ci required checks passed`, is what branch
@@ -105,6 +105,50 @@ jobs:
       # nextest does not run doctests. Run them separately (reuses the build cache).
       - name: Doctests
         run: cargo test --workspace --all-features --doc
+      # Non-blocking, tokenless (public repo). Uploads even on failure (nextest
+      # writes junit.xml before exiting non-zero), which is when analytics matter.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: target/nextest/ci/junit.xml
+          disable_search: true
+          report_type: test_results
+          fail_ci_if_error: false
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          components: llvm-tools-preview
+          rustflags: ""
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-llvm-cov
+      # Enforce the line floor and emit lcov. cargo-llvm-cov writes lcov.info before
+      # the threshold check, so the upload still runs on a floor failure.
+      # The thin process entry (main.rs) and the one unsafe FFI module are excluded
+      # from the floor and from Codecov (codecov.yml `ignore:`). An integration test
+      # still runs the binary, and the FFI module gets its own sanitizer stress test.
+      - name: Coverage (lcov + line floor)
+        run: >-
+          cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+          --fail-under-lines 90
+          --ignore-filename-regex 'crates/lodger/src/main\.rs|crates/lodger-virt/src/events/ffi\.rs'
+      - name: Upload to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          flags: rust
+          fail_ci_if_error: false
 
   supply-chain:
     name: audit · deny
@@ -125,7 +169,7 @@ jobs:
     # The single status that branch protection requires. Add new required jobs to needs.
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, supply-chain]
+    needs: [lint, msrv, test, coverage, supply-chain]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
