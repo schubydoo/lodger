@@ -1,0 +1,101 @@
+//! The REST API. Reads come from the inventory cache (TAD section 5).
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use lodger_core::model::{HostInfo, Vm, VmState};
+use lodger_virt::ConnState;
+use serde::Serialize;
+use uuid::Uuid;
+
+use crate::server::AppState;
+
+/// The connection state as JSON, for the UI banner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Connection {
+    /// `connecting`, `connected`, or `disconnected`.
+    pub state: &'static str,
+    /// Why Lodger is disconnected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl From<ConnState> for Connection {
+    fn from(state: ConnState) -> Self {
+        match state {
+            ConnState::Connecting => Self {
+                state: "connecting",
+                error: None,
+            },
+            ConnState::Connected => Self {
+                state: "connected",
+                error: None,
+            },
+            ConnState::Disconnected { error } => Self {
+                state: "disconnected",
+                error: Some(error),
+            },
+        }
+    }
+}
+
+/// `GET /api/host`.
+#[derive(Debug, Serialize)]
+pub struct Host {
+    pub connection: Connection,
+    /// `None` while Lodger is not connected.
+    pub info: Option<HostInfo>,
+    pub vms: VmCounts,
+    pub pools: usize,
+    pub networks: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VmCounts {
+    pub total: usize,
+    pub running: usize,
+}
+
+pub async fn host(State(state): State<AppState>) -> Json<Host> {
+    let inventory = state.host.inventory();
+    let info = match state.host.virt() {
+        Some(virt) => virt.host_info().await.ok(),
+        None => None,
+    };
+    Json(Host {
+        connection: state.host.state().into(),
+        info,
+        vms: VmCounts {
+            total: inventory.vms.len(),
+            running: inventory
+                .vms
+                .values()
+                .filter(|vm| vm.state == VmState::Running)
+                .count(),
+        },
+        pools: inventory.pools.len(),
+        networks: inventory.networks.len(),
+    })
+}
+
+/// `GET /api/vms`: every VM, sorted by name.
+pub async fn vms(State(state): State<AppState>) -> Json<Vec<Vm>> {
+    let mut vms: Vec<Vm> = state.host.inventory().vms.into_values().collect();
+    vms.sort_by(|a, b| a.name.cmp(&b.name).then(a.uuid.cmp(&b.uuid)));
+    Json(vms)
+}
+
+/// `GET /api/vms/{id}`. API paths use the UUID, so a VM that another tool
+/// deletes and defines again under the same name is a different VM.
+pub async fn vm(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vm>, StatusCode> {
+    state
+        .host
+        .inventory()
+        .vms
+        .remove(&id)
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}

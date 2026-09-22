@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use lodger_core::model::HostInfo;
 use lodger_core::validate::{InputError, check_text};
 use tokio::sync::{Semaphore, broadcast};
 use virt::connect::Connect;
@@ -178,6 +179,21 @@ impl Virt {
         let _ = self.hub.send(event);
     }
 
+    /// Reads the host facts: name, libvirt version, CPUs, and memory.
+    pub async fn host_info(&self) -> Result<HostInfo, Error> {
+        self.read(|c| {
+            let node = c.node_info()?;
+            let v = c.lib_version()?;
+            Ok(HostInfo {
+                hostname: c.hostname()?,
+                libvirt_version: format!("{}.{}.{}", v / 1_000_000, v / 1000 % 1000, v % 1000),
+                cpus: node.cpus,
+                memory_kib: node.memory,
+            })
+        })
+        .await
+    }
+
     /// Runs a fast call, such as a list or a lookup, on the read connection.
     pub async fn read<T, F>(&self, f: F) -> Result<T, Error>
     where
@@ -276,6 +292,22 @@ mod tests {
                 .unwrap()
                 .contains(&"test".to_owned())
         );
+    }
+
+    #[tokio::test]
+    async fn host_info_reads_the_test_driver_node() {
+        let info = Virt::open(TEST_URI)
+            .await
+            .unwrap()
+            .host_info()
+            .await
+            .unwrap();
+        // The test driver describes a fixed node: 16 CPUs and 3 GiB.
+        assert_eq!(info.cpus, 16);
+        assert_eq!(info.memory_kib, 3_145_728);
+        assert!(!info.hostname.is_empty());
+        let (major, _, _) = crate::client_library_version().unwrap();
+        assert!(info.libvirt_version.starts_with(&format!("{major}.")));
     }
 
     #[tokio::test]

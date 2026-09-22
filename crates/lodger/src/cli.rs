@@ -8,6 +8,9 @@ use clap::{Parser, Subcommand};
 /// through a reverse proxy with TLS.
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:8460";
 
+/// The libvirt connection that Lodger manages by default.
+pub const DEFAULT_URI: &str = "qemu:///system";
+
 /// Lodger: a web UI for the KVM/QEMU VMs on this host.
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -23,6 +26,10 @@ pub enum Command {
         /// Address and port to listen on.
         #[arg(long, default_value = DEFAULT_LISTEN)]
         listen: SocketAddr,
+        /// libvirt connection URI. `test:///default` uses libvirt's built-in
+        /// test driver, which needs no libvirtd.
+        #[arg(long, default_value = DEFAULT_URI)]
+        uri: String,
     },
     /// Print the Lodger version and the libvirt client library version.
     Version,
@@ -46,9 +53,10 @@ mod tests {
     fn serve_defaults_to_loopback_port_8460() {
         let cli = Cli::try_parse_from(["lodger", "serve"]).unwrap();
         match cli.command {
-            Command::Serve { listen } => {
+            Command::Serve { listen, uri } => {
                 assert!(listen.ip().is_loopback());
                 assert_eq!(listen.port(), 8460);
+                assert_eq!(uri, "qemu:///system");
             }
             Command::Version => panic!("expected serve"),
         }
@@ -57,7 +65,13 @@ mod tests {
     #[test]
     fn serve_accepts_a_listen_address() {
         let cli = Cli::try_parse_from(["lodger", "serve", "--listen", "127.0.0.1:0"]).unwrap();
-        assert!(matches!(cli.command, Command::Serve { listen } if listen.port() == 0));
+        assert!(matches!(cli.command, Command::Serve { listen, .. } if listen.port() == 0));
+    }
+
+    #[test]
+    fn serve_accepts_a_libvirt_uri() {
+        let cli = Cli::try_parse_from(["lodger", "serve", "--uri", "test:///default"]).unwrap();
+        assert!(matches!(cli.command, Command::Serve { uri, .. } if uri == "test:///default"));
     }
 
     #[test]
