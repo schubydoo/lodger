@@ -430,6 +430,7 @@ dependencies = [
  "lodger-core",
  "thiserror",
  "tokio",
+ "uuid",
  "virt",
 ]
 

@@ -14,8 +14,10 @@ use std::thread;
 use std::time::Duration;
 
 use lodger_core::validate::{InputError, check_text};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, broadcast};
 use virt::connect::Connect;
+
+use crate::events::{self, Event, Registration};
 
 /// Permits for fast calls on the read connection.
 const FAST_PERMITS: usize = 3;
@@ -70,16 +72,30 @@ fn start_event_loop() -> Result<(), Error> {
 /// holds its own reference and would keep the connection open.
 ///
 /// The `Option` is always `Some` until `drop` takes the [`Connect`] out.
-#[derive(Debug)]
-struct Connection(Option<Connect>);
+struct Connection {
+    conn: Option<Connect>,
+    /// The event callbacks, on the read connection only.
+    events: Option<Registration>,
+}
 
 impl Connection {
-    fn new(conn: Connect) -> Self {
-        Self(Some(conn))
+    fn new(conn: Connect, events: Option<Registration>) -> Self {
+        Self {
+            conn: Some(conn),
+            events,
+        }
     }
 
     fn get(&self) -> &Connect {
-        self.0.as_ref().expect("only drop takes the connection")
+        self.conn.as_ref().expect("only drop takes the connection")
+    }
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("events", &self.events.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -88,11 +104,18 @@ impl Drop for Connection {
     /// worker thread. Inside a runtime, the close runs on the blocking pool.
     /// If the runtime is shutting down and never runs the task, dropping
     /// the task still drops the [`Connect`] and closes it.
+    ///
+    /// The event callbacks go first, while the connection is still open.
     fn drop(&mut self) {
-        let Some(conn) = self.0.take() else { return };
+        let events = self.events.take();
+        let conn = self.conn.take();
+        let close = move || {
+            drop(events);
+            drop(conn);
+        };
         match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => drop(runtime.spawn_blocking(move || drop(conn))),
-            Err(_) => drop(conn),
+            Ok(runtime) => drop(runtime.spawn_blocking(close)),
+            Err(_) => close(),
         }
     }
 }
@@ -106,25 +129,36 @@ pub struct Virt {
     job: Arc<Connection>,
     fast: Arc<Semaphore>,
     long: Arc<Semaphore>,
+    hub: broadcast::Sender<Event>,
 }
 
 impl Virt {
     /// Starts the event loop if needed, then opens the read and the job
-    /// connection to `uri`, for example `qemu:///system`.
+    /// connection to `uri`, for example `qemu:///system`. The read
+    /// connection registers the event callbacks.
     pub async fn open(uri: &str) -> Result<Self, Error> {
         let uri = check_text("libvirt URI", uri)?.to_owned();
         tokio::task::spawn_blocking(move || {
             start_event_loop()?;
             let read = Connect::open(Some(&uri))?;
             let job = Connect::open(Some(&uri))?;
+            let (hub, _) = broadcast::channel(events::HUB_CAPACITY);
+            let registration = events::register(&read, &hub)?;
             Ok(Self {
-                read: Arc::new(Connection::new(read)),
-                job: Arc::new(Connection::new(job)),
+                read: Arc::new(Connection::new(read, Some(registration))),
+                job: Arc::new(Connection::new(job, None)),
                 fast: Arc::new(Semaphore::new(FAST_PERMITS)),
                 long: Arc::new(Semaphore::new(LONG_PERMITS)),
+                hub,
             })
         })
         .await?
+    }
+
+    /// Returns a new subscription to the event hub. It sees every event
+    /// from now on.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.hub.subscribe()
     }
 
     /// Runs a fast call, such as a list or a lookup, on the read connection.
@@ -181,9 +215,10 @@ mod tests {
         let virt = Virt::open(TEST_URI).await.unwrap();
         let from_read = virt.read(domain_names).await.unwrap();
         let from_job = virt.job(domain_names).await.unwrap();
-        // The test driver always starts with one domain called "test".
-        assert_eq!(from_read, ["test"]);
-        assert_eq!(from_job, ["test"]);
+        // The test driver always has a domain called "test". The event tests
+        // define their own domains in the same shared driver.
+        assert!(from_read.contains(&"test".to_owned()));
+        assert!(from_job.contains(&"test".to_owned()));
     }
 
     #[tokio::test]
@@ -200,8 +235,20 @@ mod tests {
     async fn opening_twice_starts_the_event_loop_once() {
         let first = Virt::open(TEST_URI).await.unwrap();
         let second = Virt::open(TEST_URI).await.unwrap();
-        assert_eq!(first.read(domain_names).await.unwrap(), ["test"]);
-        assert_eq!(second.read(domain_names).await.unwrap(), ["test"]);
+        assert!(
+            first
+                .read(domain_names)
+                .await
+                .unwrap()
+                .contains(&"test".to_owned())
+        );
+        assert!(
+            second
+                .read(domain_names)
+                .await
+                .unwrap()
+                .contains(&"test".to_owned())
+        );
     }
 
     #[tokio::test]
@@ -229,7 +276,12 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, Error::Task(_)), "{err}");
         // The permit came back, and the connection still works.
-        assert_eq!(virt.read(domain_names).await.unwrap(), ["test"]);
+        assert!(
+            virt.read(domain_names)
+                .await
+                .unwrap()
+                .contains(&"test".to_owned())
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -253,7 +305,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let start = Instant::now();
-        assert_eq!(virt.read(domain_names).await.unwrap(), ["test"]);
+        assert!(
+            virt.read(domain_names)
+                .await
+                .unwrap()
+                .contains(&"test".to_owned())
+        );
         let read_time = start.elapsed();
         assert!(read_time < JOB_TIME / 4, "the read took {read_time:?}");
 

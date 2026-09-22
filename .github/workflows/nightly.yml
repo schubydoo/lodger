@@ -1,0 +1,55 @@
+name: Nightly
+
+# Slow checks that do not run on every pull request (TAD section 9.3).
+# Today: the libvirt event glue under AddressSanitizer. The real-VM tests with
+# KVM join this file later.
+#
+# The AddressSanitizer job also runs on each pull request that changes the event
+# glue, because every change to the one `unsafe` module needs the stress test.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - crates/lodger-virt/src/events/**
+      - .github/workflows/nightly.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  asan:
+    # 10,000 domain events through the FFI trampolines, with handles that open
+    # and drop on the way, so registration and libvirt's free callback run many
+    # times. AddressSanitizer needs nightly Rust and a std built with it
+    # (`-Zbuild-std`). The test driver runs in process, so no libvirtd is needed.
+    name: event glue under AddressSanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          toolchain: nightly
+          components: rust-src
+          rustflags: ""
+          build-warnings: warn
+      - name: Stress test under AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+        run: >-
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p lodger-virt -- --ignored --exact events::tests::stress_ten_thousand_events

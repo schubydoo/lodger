@@ -1,8 +1,10 @@
 //! The libvirt adapter. This is the only crate that imports `virt`.
 
 mod conn;
+mod events;
 
 pub use conn::{Error, Virt};
+pub use events::{DomainChange, Event};
 
 /// Returns the version of the libvirt client library that Lodger links to,
 /// as `(major, minor, micro)`.
