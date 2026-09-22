@@ -126,6 +126,31 @@ mod tests {
         (status, body.to_string())
     }
 
+    /// A test driver loaded from a file. It gives each connection a state
+    /// of its own, so no other test can change what these tests compare.
+    /// `Drop` removes the file, also after a failed assertion.
+    struct PrivateDriver(std::path::PathBuf);
+
+    impl PrivateDriver {
+        fn new(test: &str, domains: &[&str]) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("lodger-{test}-{}.xml", std::process::id()));
+            let body: String = domains.iter().map(|d| domain_xml(d)).collect();
+            std::fs::write(&path, format!("<node>{body}</node>")).unwrap();
+            Self(path)
+        }
+
+        fn uri(&self) -> String {
+            format!("test://{}", self.0.display())
+        }
+    }
+
+    impl Drop for PrivateDriver {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     fn domain_xml(name: &str) -> String {
         format!(
             "<domain type='test'><name>{name}</name><memory>65536</memory>\
@@ -135,7 +160,8 @@ mod tests {
 
     #[tokio::test]
     async fn vms_lists_every_domain_with_its_state() {
-        let (addr, host) = serve().await;
+        let driver = PrivateDriver::new("list", &["alpha", "beta"]);
+        let (addr, host) = serve_uri(&driver.uri()).await;
         let (status, body) = get(&addr, "/api/vms").await;
         assert_eq!(status, 200, "{body}");
         let listed: Vec<Value> = serde_json::from_str(&body).unwrap();
@@ -147,14 +173,16 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} is missing", vm.name));
             assert_eq!(row, &serde_json::to_value(vm).unwrap());
         }
-        // The test driver starts with one running domain called "test".
-        let test = listed.iter().find(|row| row["name"] == "test").unwrap();
-        assert_eq!(test["state"], "running");
+        // Sorted by name. The test driver starts file domains as running.
+        let names: Vec<_> = listed.iter().map(|row| &row["name"]).collect();
+        assert_eq!(names, ["alpha", "beta"]);
+        assert!(listed.iter().all(|row| row["state"] == "running"));
     }
 
     #[tokio::test]
     async fn one_vm_by_uuid() {
-        let (addr, host) = serve().await;
+        let driver = PrivateDriver::new("one", &["alpha"]);
+        let (addr, host) = serve_uri(&driver.uri()).await;
         let vm = host.inventory().vms.into_values().next().unwrap();
         let (status, body) = get(&addr, &format!("/api/vms/{}", vm.uuid)).await;
         assert_eq!(status, 200);
@@ -169,7 +197,8 @@ mod tests {
 
     #[tokio::test]
     async fn host_reports_the_connection_and_the_counts() {
-        let (addr, host) = serve().await;
+        let driver = PrivateDriver::new("host", &["alpha", "beta"]);
+        let (addr, _host) = serve_uri(&driver.uri()).await;
         let (status, body) = get(&addr, "/api/host").await;
         assert_eq!(status, 200);
         let json: Value = serde_json::from_str(&body).unwrap();
@@ -178,10 +207,9 @@ mod tests {
             serde_json::json!({"state": "connected"})
         );
         assert_eq!(json["info"]["cpus"], 16);
-        let inventory = host.inventory();
-        assert_eq!(json["vms"]["total"], inventory.vms.len());
-        assert_eq!(json["pools"], inventory.pools.len());
-        assert_eq!(json["networks"], inventory.networks.len());
+        assert_eq!(json["vms"], serde_json::json!({"total": 2, "running": 2}));
+        assert_eq!(json["pools"], 0);
+        assert_eq!(json["networks"], 0);
     }
 
     #[tokio::test]
@@ -287,9 +315,8 @@ mod tests {
     /// there would make their clients fall behind too.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_client_that_reads_nothing_does_not_block_the_server() {
-        let file = std::env::temp_dir().join(format!("lodger-flood-{}.xml", std::process::id()));
-        std::fs::write(&file, "<node/>").unwrap();
-        let (addr, host) = serve_uri(&format!("test://{}", file.display())).await;
+        let driver = PrivateDriver::new("flood", &[]);
+        let (addr, host) = serve_uri(&driver.uri()).await;
         let (_stuck, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events"))
             .await
             .unwrap();
@@ -319,6 +346,5 @@ mod tests {
             slowest < Duration::from_secs(1),
             "slowest API answer: {slowest:?}"
         );
-        std::fs::remove_file(file).unwrap();
     }
 }
