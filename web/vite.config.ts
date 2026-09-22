@@ -17,6 +17,14 @@ export default defineConfig({
 			adapter: adapter({ fallback: '200.html' })
 		})
 	],
+	// `pnpm dev` serves the UI with hot reload and sends API and WebSocket
+	// requests to a local `lodger serve` on its default port.
+	server: {
+		proxy: {
+			'/api': 'http://127.0.0.1:8460',
+			'/ws': { target: 'ws://127.0.0.1:8460', ws: true }
+		}
+	},
 	test: {
 		expect: { requireAssertions: true },
 		// lcov for Codecov's `ui` flag (see .github/workflows/ci.yml and codecov.yml).
