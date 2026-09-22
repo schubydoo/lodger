@@ -1,5 +1,9 @@
 //! The libvirt adapter. This is the only crate that imports `virt`.
 
+mod conn;
+
+pub use conn::{Error, Virt};
+
 /// Returns the version of the libvirt client library that Lodger links to,
 /// as `(major, minor, micro)`.
 pub fn client_library_version() -> Result<(u32, u32, u32), virt::error::Error> {
