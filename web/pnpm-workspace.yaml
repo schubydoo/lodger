@@ -1,0 +1,16 @@
+# pnpm settings for Lodger's web app (pnpm 12).
+#
+# trustPolicy no-downgrade: refuse a package version that was published with
+# weaker trust evidence (no provenance, or a different publisher) than an
+# earlier version of the same package. This is pnpm 12's default; it is set
+# here so that the guard is explicit.
+trustPolicy: no-downgrade
+
+# Exact-version exceptions, each with its reason. Never exempt a whole package.
+trustPolicyExclude:
+  # chokidar 4.0.0 and 4.0.1 carry npm provenance; 4.0.2 and 4.0.3 (2024-12-16
+  # and 2024-12-18) were published WITHOUT provenance by the same maintainer
+  # (paulmillr), not by a new publisher. svelte-check 4.7.6 requires ^4.0.1.
+  # Checked against the npm registry on 2026-09-22. Drop this entry when
+  # svelte-check moves to chokidar 5, which is published with provenance.
+  - chokidar@4.0.3

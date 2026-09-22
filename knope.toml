@@ -16,9 +16,10 @@
 # The workspace version in the root Cargo.toml. Anchored to line start so it hits
 # `version = "X.Y.Z"` under [workspace.package] and not `rust-version` or the
 # `{ version = "..." }` dependency pins. The crates inherit it with
-# `version.workspace = true`. web/package.json joins this list with the web app.
+# `version.workspace = true`. web/package.json carries the same version.
 versioned_files = [
   { path = "Cargo.toml", regex = '(?m)^version = "(?<version>\d+\.\d+\.\d+)"' },
+  "web/package.json",
 ]
 changelog = "CHANGELOG.md"
 

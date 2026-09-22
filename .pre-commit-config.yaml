@@ -21,6 +21,9 @@ repos:
       - id: end-of-file-fixer
         exclude: '^LICENSE$'
       - id: check-yaml
+        # pnpm 12 writes pnpm-lock.yaml as two YAML documents in one file; the
+        # single-document loader rejects it. The lockfile is generated, so skip it.
+        exclude: '(^|/)pnpm-lock\.yaml$'
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key
