@@ -1,0 +1,161 @@
+name: Prepare Release
+
+# knope's "release PR" half, ported from scratchsmith. On push to main, if pending changeset fragments
+# warrant a release, knope bumps the version + CHANGELOG, resyncs Cargo.lock,
+# force-pushes the `release` branch, and opens/refreshes a
+# `chore: prepare release X.Y.Z` PR. Merging that PR triggers knope-release.yml,
+# which arrives with the signed release pipeline. Until then KNOPE_ENABLED stays false.
+#
+# workflow_dispatch with `override_version` forces a specific version instead of the
+# changeset-computed one — how a pinned release is cut. Blank input = normal bump.
+#
+# Override guard: a dispatch with `override_version` labels its release PR `release-pinned`;
+# a later plain push to main then skips refreshing that PR, so a stray merge can't silently
+# downgrade a pinned release back to the natural version. Re-dispatch to change a pinned PR.
+# (This exact race shipped scratchsmith's v0.1.4 when a merge re-ran this workflow without the override.)
+#
+# Gated on the `KNOPE_ENABLED` repo variable. Needs the lodger-ci GitHub App
+# installed (LODGER_CI_CLIENT_ID / LODGER_CI_APP_PRIVATE_KEY secrets),
+# whose identity is what lets the merge tag trigger the signed build.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      override_version:
+        description: "Force this version (e.g. 1.0.0). Blank = normal changeset bump."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: knope-prepare-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    if: ${{ vars.KNOPE_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # read the release PR's labels for the override-pin guard
+    steps:
+      # Detect a pending changeset FIRST, credential-less, so a routine push with
+      # no fragment is a clean no-op that never touches the App. A dispatch with
+      # override_version also proceeds (an intentional cut).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect pending changesets
+        id: changesets
+        env:
+          OVERRIDE: ${{ github.event.inputs.override_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count=0
+          if [ -d .changeset ]; then
+            count=$(find .changeset -maxdepth 1 -name '*.md' ! -iname 'README.md' | wc -l)
+          fi
+          has=false
+          if [ "$count" -gt 0 ] || [ -n "$OVERRIDE" ]; then has=true; fi
+          # Override guard (the v0.1.4 incident): a plain push must not refresh — and thereby
+          # downgrade — a release PR an override dispatch pinned with the `release-pinned`
+          # label. Skip push-triggered runs while that label is present; any dispatch proceeds.
+          if [ "$has" = "true" ] && [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # Fail CLOSED: if the label can't be determined (API hiccup), skip rather than risk
+            # downgrading a pinned release. A false skip just defers the refresh to the next
+            # push/dispatch; a false proceed silently downgrades (the v0.1.4 incident).
+            if pinned=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
+                 --json labels --jq 'any(.[].labels[]; .name=="release-pinned")' 2>/dev/null); then
+              if [ "$pinned" = "true" ]; then
+                has=false
+                echo "::notice::Release PR is pinned (release-pinned); leaving it untouched. Re-dispatch knope-prepare (with override_version) to change it."
+              fi
+            else
+              has=false
+              echo "::warning::couldn't query the release PR's pin state; skipping this push-triggered prepare (fail-closed) so a pinned release can't be downgraded. Re-dispatch knope-prepare to refresh."
+            fi
+          fi
+          echo "has=$has" >> "$GITHUB_OUTPUT"
+          echo "pending changeset fragments: $count; override: '${OVERRIDE:-}'"
+      # Short-lived lodger-ci App token: its identity is what lets the release
+      # PR's merge tag trigger the signed build (a GITHUB_TOKEN-pushed tag would not,
+      # due to recursion suppression), and lets CI run on the release PR.
+      - name: Mint lodger-ci App token
+        id: app-token
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.LODGER_CI_CLIENT_ID }}
+          private-key: ${{ secrets.LODGER_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify App token was minted
+        if: ${{ steps.changesets.outputs.has == 'true' && steps.app-token.outputs.token == '' }}
+        run: |
+          echo "::error::lodger-ci App token mint produced an empty token; check LODGER_CI_CLIENT_ID / LODGER_CI_APP_PRIVATE_KEY and the App installation."
+          exit 1
+      # Re-checkout with the App token persisted so knope's push of the release
+      # branch and the PR it opens run as the App identity. Full history + tags so
+      # knope can find the last release tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+      # No `toolchain:` input: the action reads rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        with:
+          cache: false
+          rustflags: ""
+      - name: Configure git identity (lodger-ci App)
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        run: |
+          git config user.name "lodger-ci[bot]"
+          git config user.email "lodger-ci[bot]@users.noreply.github.com"
+      - name: Install knope
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+        with:
+          # renovate: datasource=github-releases depName=knope-dev/knope extractVersion=^knope/v(?<version>.+)$
+          version: 0.23.0
+      - name: Open or refresh the release PR
+        if: ${{ steps.changesets.outputs.has == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          OVERRIDE: ${{ github.event.inputs.override_version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OVERRIDE" ]; then
+            knope prepare-release --verbose --override-version "$OVERRIDE"
+            # Pin the release PR so a later push to main can't downgrade it (the v0.1.4
+            # incident). The label is only ADDED (defined already in the repo), so the App
+            # token needs just pull-requests: write. Fail LOUD if the pin doesn't stick — an
+            # unpinned override PR is exactly what the guard exists to prevent. Retry the PR
+            # lookup: knope has just opened/updated it and API visibility can lag.
+            pr=""
+            for _ in 1 2 3 4 5; do
+              pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
+                --json number --jq '.[0].number' 2>/dev/null || echo "")
+              [ -n "$pr" ] && break
+              sleep 3
+            done
+            if [ -z "$pr" ]; then
+              echo "::error::override prepared but no open release PR was found to pin; a later push could downgrade it. Re-dispatch or add the release-pinned label by hand."
+              exit 1
+            fi
+            if ! gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --add-label release-pinned; then
+              echo "::error::failed to add the release-pinned label to PR #$pr; a later push could downgrade this override release. Add it by hand, then it is protected."
+              exit 1
+            fi
+          else
+            knope prepare-release --verbose
+          fi
