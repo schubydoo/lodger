@@ -142,12 +142,6 @@ pub fn parse_subnet(field: &'static str, value: &str) -> Result<Ipv4Net, InputEr
     if net.to_string() != value {
         return Err(InputError::SubnetSyntax { field });
     }
-    if net.addr() != net.network() {
-        return Err(InputError::SubnetHostBits {
-            field,
-            network: net.trunc(),
-        });
-    }
     if !PRIVATE_RANGES.iter().any(|range| range.contains(&net)) {
         return Err(InputError::SubnetNotPrivate { field });
     }
@@ -155,6 +149,13 @@ pub fn parse_subnet(field: &'static str, value: &str) -> Result<Ipv4Net, InputEr
         return Err(InputError::SubnetTooSmall {
             field,
             max: SUBNET_MAX_PREFIX,
+        });
+    }
+    // Last, so the suggested network passes every other check.
+    if net.addr() != net.network() {
+        return Err(InputError::SubnetHostBits {
+            field,
+            network: net.trunc(),
         });
     }
     Ok(net)
@@ -365,6 +366,21 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "subnet has host bits set. Use 192.168.150.0/24"
+        );
+    }
+
+    #[test]
+    fn host_bits_error_comes_last_so_its_suggestion_passes() {
+        assert_eq!(
+            parse_subnet("subnet", "8.8.8.1/24"),
+            Err(InputError::SubnetNotPrivate { field: "subnet" })
+        );
+        assert_eq!(
+            parse_subnet("subnet", "10.0.0.1/31"),
+            Err(InputError::SubnetTooSmall {
+                field: "subnet",
+                max: 30
+            })
         );
     }
 
