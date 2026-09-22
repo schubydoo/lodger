@@ -52,6 +52,8 @@ struct Shared {
     virt: RwLock<Option<Virt>>,
     state: watch::Sender<ConnState>,
     events: broadcast::Sender<Event>,
+    /// Counts the full loads of the inventory.
+    reloads: watch::Sender<u64>,
 }
 
 impl Host {
@@ -70,6 +72,7 @@ impl Host {
             virt: RwLock::default(),
             state: watch::Sender::new(ConnState::Connecting),
             events: broadcast::Sender::new(HUB_CAPACITY),
+            reloads: watch::Sender::new(0),
         });
         let task = tokio::spawn(supervise(Arc::clone(&shared), uri, retry));
         Ok(Self { shared, task })
@@ -97,8 +100,20 @@ impl Host {
 
     /// A receiver for libvirt events. Each event arrives after the
     /// inventory contains its change.
+    ///
+    /// Events do not cover every change. After a full reload (see
+    /// [`Host::watch_reloads`]) or a `Lagged` error on this receiver, read
+    /// [`Host::inventory`] again.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
+    }
+
+    /// A counter that goes up after each full load of the inventory: at
+    /// each connect, and when the supervisor falls behind the events. The
+    /// changes that a reload finds send no events, so a view must then read
+    /// the whole inventory again.
+    pub fn watch_reloads(&self) -> watch::Receiver<u64> {
+        self.shared.reloads.subscribe()
     }
 }
 
@@ -125,7 +140,7 @@ async fn supervise(shared: Arc<Shared>, uri: String, retry: Duration) {
 async fn session(shared: &Shared, uri: &str) -> Result<String, Error> {
     let virt = Virt::open(uri).await?;
     let mut rx = virt.subscribe();
-    *write(&shared.inventory) = virt.read(Inventory::load).await?;
+    reload(shared, &virt).await?;
     *write(&shared.virt) = Some(virt.clone());
     shared.state.send_replace(ConnState::Connected);
 
@@ -139,13 +154,17 @@ async fn session(shared: &Shared, uri: &str) -> Result<String, Error> {
                 let _ = shared.events.send(event);
             }
             // Too many events to follow one by one: load everything again.
-            Err(RecvError::Lagged(_)) => {
-                *write(&shared.inventory) = virt.read(Inventory::load).await?;
-            }
+            Err(RecvError::Lagged(_)) => reload(shared, &virt).await?,
             // `virt` holds a sender, so the hub stays open while it lives.
             Err(RecvError::Closed) => return Ok("the event hub closed".into()),
         }
     }
+}
+
+async fn reload(shared: &Shared, virt: &Virt) -> Result<(), Error> {
+    *write(&shared.inventory) = virt.read(Inventory::load).await?;
+    shared.reloads.send_modify(|n| *n += 1);
+    Ok(())
 }
 
 /// Explains a `virConnectCloseReason` code.
@@ -313,6 +332,31 @@ mod tests {
         wait_for(&mut state, connected).await;
         assert!(vm_named(&host.inventory(), "lodger-spike-late").is_some());
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn falling_behind_the_events_reloads_and_signals_it() {
+        let host = Host::start_with(TEST_URI, QUICK).unwrap();
+        wait_for(&mut host.watch_state(), connected).await;
+        let mut reloads = host.watch_reloads();
+        let after_connect = *reloads.borrow_and_update();
+        assert!(after_connect >= 1);
+
+        // More events than the hub holds, faster than the supervisor reads
+        // them. Each one names a domain that does not exist.
+        let virt = host.virt().unwrap();
+        for n in 0..4 * crate::events::HUB_CAPACITY as u128 {
+            virt.inject(Event::Domain {
+                id: uuid::Uuid::from_u128(n + 1),
+                change: crate::events::DomainChange::Reboot,
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(5), reloads.changed())
+            .await
+            .expect("no reload within 5 seconds")
+            .unwrap();
+        assert!(*reloads.borrow() > after_connect);
+        assert_eq!(host.state(), ConnState::Connected);
     }
 
     #[tokio::test]
