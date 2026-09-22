@@ -67,7 +67,12 @@ pub fn respond(
     headers: &HeaderMap,
 ) -> Response {
     if method != Method::GET && method != Method::HEAD {
-        return status(StatusCode::METHOD_NOT_ALLOWED);
+        // RFC 9110 section 15.5.6: a 405 response MUST carry an Allow header.
+        return Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .header(header::ALLOW, "GET, HEAD")
+            .body(Body::empty())
+            .expect("valid response");
     }
     let path = path.trim_start_matches('/');
     if path.contains('\\') || path.split('/').any(|seg| seg == "..") {
@@ -251,6 +256,7 @@ mod tests {
     fn other_methods_get_405() {
         let r = respond(&app(), &Method::POST, "/", &HeaderMap::new());
         assert_eq!(r.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(header(&r, header::ALLOW), "GET, HEAD");
     }
 
     #[test]
