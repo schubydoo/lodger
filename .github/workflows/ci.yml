@@ -1,0 +1,146 @@
+name: CI
+
+# fmt + clippy + rustdoc + typos, the test suite, an MSRV build, and a
+# supply-chain audit. Ported from scratchsmith, with Lodger's differences:
+# every cargo job installs libvirt-dev (the virt crate links libvirt), the
+# toolchain comes from rust-toolchain.toml, and there is no musl build.
+# A single aggregator job, `ci required checks passed`, is what branch
+# protection requires. Extend it through `needs`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default (OpenSSF Scorecard Token-Permissions).
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt · clippy · docs · typos
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Spell-check all text, comments included. False positives go in _typos.toml.
+      - name: Typos
+        uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
+      # Lodger keeps every `unsafe` in one audited module (the libvirt event glue).
+      # This fails the moment `unsafe` appears anywhere else in the crates.
+      - name: unsafe only in events/ffi.rs
+        run: |
+          set -euo pipefail
+          hits=$(grep -rnw 'unsafe' crates --include='*.rs' \
+            | grep -v '^crates/lodger-virt/src/events/ffi.rs:' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::unsafe is allowed only in crates/lodger-virt/src/events/ffi.rs"
+            echo "$hits"
+            exit 1
+          fi
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      # No `toolchain:` input: the action reads rust-toolchain.toml (Rust 1.98.1).
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The only step that fires rustdoc lints (broken intra-doc links, bad code blocks).
+      - name: Docs (deny warnings)
+        run: cargo doc --workspace --no-deps --all-features --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    # Prove the workspace still builds on its declared MSRV (Cargo.toml rust-version),
+    # not just on the pinned toolchain. `cargo +1.95.0` overrides rust-toolchain.toml.
+    name: build (MSRV 1.95)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          toolchain: 1.95.0
+          rustflags: ""
+          build-warnings: warn
+      - run: cargo +1.95.0 build --workspace --all-features
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # libvirt-dev brings the libvirt client library, which also runs the
+      # in-process test driver (test:///default). No libvirt daemon is needed.
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          rustflags: ""
+      # nextest instead of `cargo test`: the same gate, plus a junit.xml (the ci
+      # profile in .config/nextest.toml) for Codecov Test Analytics later.
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-nextest
+      - name: Test (nextest)
+        run: cargo nextest run --workspace --all-features --profile ci
+      # nextest does not run doctests. Run them separately (reuses the build cache).
+      - name: Doctests
+        run: cargo test --workspace --all-features --doc
+
+  supply-chain:
+    name: audit · deny
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2.87.17
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Audit
+        run: cargo audit
+      - name: Deny
+        run: cargo deny check
+
+  ci-required-checks:
+    # The single status that branch protection requires. Add new required jobs to needs.
+    name: ci required checks passed
+    if: always()
+    needs: [lint, msrv, test, supply-chain]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Check required jobs passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          failing=$(echo "$NEEDS_JSON" | jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key): \(.value.result)"
+          ')
+          if [ -n "$failing" ]; then
+            echo "Failed or cancelled jobs:"
+            echo "$failing"
+            exit 1
+          fi
+          echo "All required jobs passed."

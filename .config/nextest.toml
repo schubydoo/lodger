@@ -1,0 +1,4 @@
+# The `ci` profile emits a JUnit report at target/nextest/ci/junit.xml, the
+# format that Codecov Test Analytics reads (see .github/workflows/ci.yml).
+[profile.ci.junit]
+path = "junit.xml"

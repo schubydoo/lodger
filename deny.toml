@@ -1,0 +1,38 @@
+# cargo-deny configuration: the supply-chain gate. Ported from scratchsmith.
+# Lodger differences: LGPL-2.1 for the libvirt `virt` crate, and one allowed
+# Git source for the reviewed `virt` pin (see docs/virt-pin.md).
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Silence "license was not encountered" for forward-looking entries.
+unused-allowed-license = "allow"
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    # The libvirt `virt` and `virt-sys` crates. Lodger links them into an
+    # Apache-2.0 binary and ships their license notices with each release.
+    "LGPL-2.1",
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://gitlab.com/libvirt/libvirt-rust.git"]
