@@ -60,7 +60,7 @@ pub async fn events(
 /// WebSocket upgrade, so an upgrade with an `Origin` from another host is
 /// refused. A request without `Origin` does not come from a page, for
 /// example `websocat` on the host, and passes. Login comes in Task 2.3.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };

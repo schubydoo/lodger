@@ -101,6 +101,7 @@ component_management:
         - crates/lodger-virt/src/lib.rs
         - crates/lodger-virt/src/cache.rs
         - crates/lodger-virt/src/conn.rs
+        - crates/lodger-virt/src/console.rs
         - crates/lodger-virt/src/events/mod.rs
         - crates/lodger-virt/src/supervisor.rs
     - component_id: lodger
@@ -109,6 +110,7 @@ component_management:
         - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
         - crates/lodger/src/cli.rs
+        - crates/lodger/src/console.rs
         - crates/lodger/src/server.rs
         - crates/lodger/src/ws.rs
     # The web UI selects its files by flag, not by path, so no path list needs
