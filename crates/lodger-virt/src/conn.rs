@@ -30,7 +30,7 @@ pub enum Error {
     #[error("libvirt: {0}")]
     Libvirt(#[from] virt::error::Error),
     #[error("could not start the libvirt event loop: {0}")]
-    EventLoop(virt::error::Error),
+    EventLoop(String),
     /// The closure panicked, or the runtime shut down before it ran.
     #[error("the libvirt call did not finish: {0}")]
     Task(#[from] tokio::task::JoinError),
@@ -40,10 +40,10 @@ pub enum Error {
 /// its own thread. libvirt needs the loop registered before the first
 /// connection opens. Events and keepalive both depend on it.
 fn start_event_loop() -> Result<(), Error> {
-    static STARTED: OnceLock<Result<(), virt::error::Error>> = OnceLock::new();
+    static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
     STARTED
         .get_or_init(|| {
-            virt::event::event_register_default_impl()?;
+            virt::event::event_register_default_impl().map_err(|e| e.to_string())?;
             thread::Builder::new()
                 .name("libvirt-events".into())
                 .spawn(|| {
@@ -56,7 +56,7 @@ fn start_event_loop() -> Result<(), Error> {
                         }
                     }
                 })
-                .expect("the OS could not start the libvirt event thread");
+                .map_err(|e| format!("the OS could not start the thread: {e}"))?;
             Ok(())
         })
         .clone()
@@ -68,8 +68,34 @@ fn start_event_loop() -> Result<(), Error> {
 ///
 /// The owner never hands out a clone of the [`Connect`], because each clone
 /// holds its own reference and would keep the connection open.
+///
+/// The `Option` is always `Some` until `drop` takes the [`Connect`] out.
 #[derive(Debug)]
-struct Connection(Connect);
+struct Connection(Option<Connect>);
+
+impl Connection {
+    fn new(conn: Connect) -> Self {
+        Self(Some(conn))
+    }
+
+    fn get(&self) -> &Connect {
+        self.0.as_ref().expect("only drop takes the connection")
+    }
+}
+
+impl Drop for Connection {
+    /// `virConnectClose` can wait on libvirtd, so it must not block a Tokio
+    /// worker thread. Inside a runtime, the close runs on the blocking pool.
+    /// If the runtime is shutting down and never runs the task, dropping
+    /// the task still drops the [`Connect`] and closes it.
+    fn drop(&mut self) {
+        let Some(conn) = self.0.take() else { return };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(move || drop(conn))),
+            Err(_) => drop(conn),
+        }
+    }
+}
 
 /// A shared handle to Lodger's 2 libvirt connections. Clone it freely.
 /// When the last clone drops and no call is still running, both
@@ -92,8 +118,8 @@ impl Virt {
             let read = Connect::open(Some(&uri))?;
             let job = Connect::open(Some(&uri))?;
             Ok(Self {
-                read: Arc::new(Connection(read)),
-                job: Arc::new(Connection(job)),
+                read: Arc::new(Connection::new(read)),
+                job: Arc::new(Connection::new(job)),
                 fast: Arc::new(Semaphore::new(FAST_PERMITS)),
                 long: Arc::new(Semaphore::new(LONG_PERMITS)),
             })
@@ -131,7 +157,7 @@ where
         .await
         .expect("Lodger never closes the semaphores");
     let conn = Arc::clone(conn);
-    Ok(tokio::task::spawn_blocking(move || f(&conn.0)).await??)
+    Ok(tokio::task::spawn_blocking(move || f(conn.get())).await??)
 }
 
 #[cfg(test)]
@@ -252,5 +278,14 @@ mod tests {
         // No owner is left, so each `Connect` dropped and closed.
         assert!(read.upgrade().is_none());
         assert!(job.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_last_handle_can_drop_outside_a_runtime() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let read = Arc::downgrade(&virt.read);
+        // A plain OS thread has no Tokio runtime, so the close runs inline.
+        std::thread::spawn(move || drop(virt)).join().unwrap();
+        assert!(read.upgrade().is_none());
     }
 }
