@@ -23,6 +23,10 @@ use crate::events::{self, Event, Registration};
 const FAST_PERMITS: usize = 3;
 /// Permits for long jobs on the job connection.
 const LONG_PERMITS: usize = 2;
+/// Keepalive: a probe every 5 seconds, and the connection closes after 3
+/// probes without an answer (TAD section 4.3).
+const KEEPALIVE_INTERVAL: i32 = 5;
+const KEEPALIVE_COUNT: u32 = 3;
 
 /// Why a libvirt operation failed.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +49,10 @@ fn start_event_loop() -> Result<(), Error> {
     static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
     STARTED
         .get_or_init(|| {
+            // libvirt's default handler prints every error to stderr, even
+            // one that Lodger expects, such as "Domain not found" after a
+            // delete. Lodger reads each error from the return value instead.
+            virt::error::clear_error_callback();
             virt::event::event_register_default_impl().map_err(|e| e.to_string())?;
             thread::Builder::new()
                 .name("libvirt-events".into())
@@ -142,6 +150,8 @@ impl Virt {
             start_event_loop()?;
             let read = Connect::open(Some(&uri))?;
             let job = Connect::open(Some(&uri))?;
+            keep_alive(&read)?;
+            keep_alive(&job)?;
             let (hub, _) = broadcast::channel(events::HUB_CAPACITY);
             let registration = events::register(&read, &hub)?;
             Ok(Self {
@@ -161,6 +171,13 @@ impl Virt {
         self.hub.subscribe()
     }
 
+    /// Sends `event` to the hub as if libvirt had sent it, for example a
+    /// close, which the test driver never sends.
+    #[cfg(test)]
+    pub(crate) fn inject(&self, event: Event) {
+        let _ = self.hub.send(event);
+    }
+
     /// Runs a fast call, such as a list or a lookup, on the read connection.
     pub async fn read<T, F>(&self, f: F) -> Result<T, Error>
     where
@@ -177,6 +194,16 @@ impl Virt {
         T: Send + 'static,
     {
         run(&self.long, &self.job, f).await
+    }
+}
+
+/// Turns on keepalive, so a dead libvirtd closes the connection and the
+/// close callback fires. The in-process test driver has no connection to
+/// check and reports `NoSupport`.
+fn keep_alive(conn: &Connect) -> Result<(), virt::error::Error> {
+    match conn.set_keep_alive(KEEPALIVE_INTERVAL, KEEPALIVE_COUNT) {
+        Err(e) if e.code().known() == Some(virt::error::ErrorNumber::NoSupport) => Ok(()),
+        other => other,
     }
 }
 
