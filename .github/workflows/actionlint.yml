@@ -1,0 +1,90 @@
+name: Actionlint
+
+# Lints GitHub Actions workflows: YAML schema, `${{ }}` expression types, and — via
+# shellcheck — the shell in every `run:` block, which nothing else covered. actionlint reads
+# .github/workflows/** only and never opens a composite action, so a second step below
+# shellchecks the `run:` blocks under .github/actions/. Runs on every
+# pull request and on push to main with no `paths:` filter: actionlint over the tree takes
+# seconds, and a paths-filtered check that is also required hangs a non-workflow PR at
+# "Expected — waiting for status", so always-on keeps it safe to mark required. The `$/`
+# self-repository `uses:` false positive is suppressed in .github/actionlint.yaml.
+
+on:
+  pull_request:
+    # Explicit list = the implicit defaults (opened/synchronize/reopened) plus
+    # ready_for_review, which re-fires on the draft → ready flip.
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actionlint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install + run actionlint (version + checksum pinned)
+        env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint
+          ACTIONLINT_VERSION: "1.7.12"
+          # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from the release's checksums.txt.
+          # Renovate can bump the pair; a moved artifact fails the -c.
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL "$url" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          # The shellcheck binary is preinstalled on the runner; fail loudly if that ever
+          # changes so run: blocks never go silently unlinted. (This comment avoids starting
+          # with the tool's name, which reads as an SC directive and errors SC1072/SC1073.)
+          shellcheck --version >/dev/null \
+            || { echo "::error::shellcheck missing — run: blocks would go unlinted"; exit 1; }
+          ./actionlint -color
+      - name: ShellCheck the composite actions
+        # actionlint does not read .github/actions/*/action.yml, so the `run:` blocks there
+        # would go unchecked — including the release image's per-arch assertions and the
+        # cosign sign-and-verify tail. Extract each one and run the same shellcheck.
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r f; do
+            found=1
+            python3 - "$f" <<'PY'
+          import pathlib, subprocess, sys, yaml
+          path = pathlib.Path(sys.argv[1])
+          doc = yaml.safe_load(path.read_text())
+          rc = 0
+          for i, step in enumerate(doc.get("runs", {}).get("steps", [])):
+              if "run" not in step:
+                  continue
+              shell = step.get("shell", "bash")
+              if shell not in ("bash", "sh"):
+                  continue
+              name = step.get("name", f"step {i}")
+              script = f"#!/usr/bin/env {shell}\n{step['run']}"
+              out = subprocess.run(
+                  ["shellcheck", "--shell", shell, "--format", "gcc", "-"],
+                  input=script, capture_output=True, text=True,
+              )
+              if out.returncode != 0:
+                  rc = 1
+                  print(f"::error file={path}::shellcheck failed for '{name}'")
+                  print(out.stdout, end="")
+          sys.exit(rc)
+          PY
+          done < <(find .github/actions -name 'action.yml' -o -name 'action.yaml')
+          if [ "$found" -eq 0 ]; then
+            echo "no composite actions found under .github/actions — nothing to check"
+          fi

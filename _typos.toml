@@ -1,0 +1,3 @@
+# Allow-list and exclusions for the typos spell checker (see ci.yml).
+[files]
+extend-exclude = ["Cargo.lock", "LICENSE"]
