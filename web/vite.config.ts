@@ -1,5 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
+import { svelteTesting } from '@testing-library/svelte/vite';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 
@@ -31,9 +32,23 @@ export default defineConfig({
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'lcov'],
-			include: ['src/**/*.{ts,svelte}']
+			include: ['src/**/*.{ts,svelte}'],
+			// shadcn-svelte code copied from upstream, and test helpers. The same
+			// paths are in codecov.yml `ignore:`.
+			exclude: ['src/lib/components/ui/**', 'src/lib/test/**']
 		},
 		projects: [
+			{
+				// Components, rendered in jsdom with Testing Library.
+				extends: './vite.config.ts',
+				plugins: [svelteTesting()],
+				test: {
+					name: 'client',
+					environment: 'jsdom',
+					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+					setupFiles: ['./src/lib/test/setup.ts']
+				}
+			},
 			{
 				extends: './vite.config.ts',
 				test: {

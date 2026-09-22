@@ -1,13 +1,13 @@
 <script lang="ts">
 	import {
-		CircleQuestionMark,
-		LoaderCircle,
-		Moon,
-		Pause,
-		Play,
-		Square,
-		TriangleAlert
-	} from '@lucide/svelte';
+		IconAlertTriangle,
+		IconHelpCircle,
+		IconLoader2,
+		IconMoon,
+		IconPlayerPause,
+		IconPlayerPlay,
+		IconPlayerStop
+	} from '@tabler/icons-svelte';
 	import type { VmState } from '$lib/api';
 	import { stateLook, type StateIcon } from '$lib/vm-state';
 	import { cn } from '$lib/utils';
@@ -15,13 +15,13 @@
 	let { state }: { state: VmState } = $props();
 
 	const icons = {
-		play: Play,
-		pause: Pause,
-		square: Square,
-		loader: LoaderCircle,
-		alert: TriangleAlert,
-		moon: Moon,
-		help: CircleQuestionMark
+		play: IconPlayerPlay,
+		pause: IconPlayerPause,
+		square: IconPlayerStop,
+		loader: IconLoader2,
+		alert: IconAlertTriangle,
+		moon: IconMoon,
+		help: IconHelpCircle
 	} satisfies Record<StateIcon, unknown>;
 
 	const look = $derived(stateLook(state));

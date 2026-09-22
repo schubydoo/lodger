@@ -50,9 +50,14 @@ flags:
 
 # The thin process entry and the one unsafe FFI module are excluded here and from
 # the CI floor (see the coverage job in ci.yml).
+#
+# The web UI also leaves out the shadcn-svelte code copied from upstream and
+# the test helpers. web/vite.config.ts excludes the same paths from the lcov.
 ignore:
   - "crates/lodger/src/main.rs"
   - "crates/lodger-virt/src/events/ffi.rs"
+  - "web/src/lib/components/ui/**/*"
+  - "web/src/lib/test/**/*"
 
 github_checks:
   annotations: false # per-line PR annotations are clutter; the comment carries the signal

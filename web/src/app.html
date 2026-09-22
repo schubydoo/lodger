@@ -1,8 +1,13 @@
 <!doctype html>
-<html lang="en">
+<!-- Dark is the default theme (Schuby's choice). A theme switcher later
+     only toggles this class; every color already has a light and a dark value
+     in src/routes/layout.css. -->
+<html lang="en" class="dark">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- Native controls and scrollbars follow the theme. -->
+		<meta name="color-scheme" content="dark light" />
 		<!-- Scale the root font size with the OS and browser text-size settings (WCAG 1.4.4).
 		     From the Svelte CLI template. See MDN: <meta name="text-scale">. -->
 		<meta name="text-scale" content="scale" />

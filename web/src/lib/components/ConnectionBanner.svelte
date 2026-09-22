@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
-	import { Unplug } from '@lucide/svelte';
+	import { IconPlugConnectedX } from '@tabler/icons-svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { fetchHost, keys } from '$lib/api';
 
@@ -36,7 +36,7 @@
 	{#if problem}
 		<!-- role={null}: the wrapper is the one alert region, not this box. -->
 		<Alert.Root variant="destructive" role={null} class="rounded-none border-x-0 border-t-0">
-			<Unplug aria-hidden="true" />
+			<IconPlugConnectedX aria-hidden="true" />
 			<Alert.Title>{problem.title}</Alert.Title>
 			<Alert.Description>{problem.detail}</Alert.Description>
 		</Alert.Root>

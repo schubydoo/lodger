@@ -2,7 +2,7 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
-	import { resolve } from '$app/paths';
+	import { asset, resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
@@ -64,4 +64,15 @@
 	<main id="main" tabindex="-1" class="mx-auto max-w-6xl px-4 py-6 focus:outline-none">
 		{@render children()}
 	</main>
+	<footer class="mx-auto max-w-6xl border-t px-4 py-4 text-xs text-muted-foreground">
+		<!-- A static file, not a route: data-sveltekit-reload makes the browser
+		     load it instead of the client router. -->
+		<a
+			href={asset('/third-party-notices.txt')}
+			data-sveltekit-reload
+			class="rounded-sm underline underline-offset-4 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+		>
+			Third-party notices
+		</a>
+	</footer>
 </QueryClientProvider>
