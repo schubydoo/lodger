@@ -3,8 +3,8 @@
 //! The read connection registers callbacks for domain, network, and pool
 //! changes, and for the close of the connection. Each callback copies the
 //! object's UUID and the event codes into an [`Event`] and sends it to the
-//! hub, a Tokio broadcast channel. The inventory cache and the browser
-//! WebSocket each subscribe to the hub.
+//! hub, a Tokio broadcast channel. The supervisor subscribes to the hub,
+//! updates the inventory, and passes each event on through `Host::subscribe`.
 //!
 //! The registration code lives in [`ffi`], the only module that calls
 //! `virt::sys`.
