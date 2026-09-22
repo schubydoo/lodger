@@ -78,3 +78,9 @@ component_management:
       name: lodger-virt (libvirt adapter)
       paths:
         - crates/lodger-virt/src/lib.rs
+    - component_id: lodger
+      name: lodger (server, web assets, CLI)
+      paths:
+        - crates/lodger/src/assets.rs
+        - crates/lodger/src/cli.rs
+        - crates/lodger/src/server.rs

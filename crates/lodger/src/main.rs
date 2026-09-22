@@ -1,14 +1,24 @@
-//! The `lodger` binary. The server and CLI arrive in later tasks.
+//! The `lodger` binary: parse the command line and dispatch.
+
+mod assets;
+mod cli;
+mod server;
+
+use clap::Parser;
 
 fn main() {
-    match lodger_virt::client_library_version() {
-        Ok((major, minor, micro)) => println!(
-            "lodger {} (libvirt client {major}.{minor}.{micro})",
-            env!("CARGO_PKG_VERSION")
-        ),
-        Err(e) => {
-            eprintln!("lodger: cannot read the libvirt client version: {e}");
-            std::process::exit(1);
-        }
+    let cli = cli::Cli::parse();
+    let result = match cli.command {
+        cli::Command::Version => cli::version_line().map(|line| println!("{line}")),
+        cli::Command::Serve { listen } => tokio::runtime::Runtime::new()
+            .map_err(|e| format!("cannot start the async runtime: {e}"))
+            .and_then(|rt| {
+                rt.block_on(server::serve(listen))
+                    .map_err(|e| format!("cannot serve on {listen}: {e}"))
+            }),
+    };
+    if let Err(e) = result {
+        eprintln!("lodger: {e}");
+        std::process::exit(1);
     }
 }

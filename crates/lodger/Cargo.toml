@@ -8,8 +8,12 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive"] }
 lodger-core.workspace = true
 lodger-virt.workspace = true
+rust-embed = { version = "8.12.0", features = ["mime-guess"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 [lints]
 workspace = true

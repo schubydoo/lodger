@@ -9,9 +9,10 @@ setup:
 dev:
     @echo "not ready yet: comes with the web app" && exit 1
 
-# Run the backend only, with no Node
+# Run the backend only, with no Node. Serves web/build from disk if it exists,
+# or a stub page if it does not.
 dev-api:
-    cargo run -p lodger
+    cargo run -p lodger -- serve
 
 # Format, lint, and test
 check:
@@ -19,6 +20,7 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
-# Build the release binary
+# Build the web UI, then the release binary that embeds it
 build:
+    cd web && pnpm install --frozen-lockfile && pnpm run build
     cargo build --release -p lodger
