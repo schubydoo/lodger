@@ -12,9 +12,14 @@ on:
     - cron: "17 4 * * *"
   workflow_dispatch:
   pull_request:
+    # The glue, the code that registers it and drops it, the dependency versions
+    # (the `virt` pin and tokio), and this job's own files.
     paths:
       - crates/lodger-virt/src/events/**
+      - crates/lodger-virt/src/conn.rs
+      - Cargo.lock
       - .github/workflows/nightly.yml
+      - .github/lsan-suppressions.txt
 
 permissions:
   contents: read
@@ -50,6 +55,8 @@ jobs:
       - name: Stress test under AddressSanitizer
         env:
           RUSTFLAGS: -Zsanitizer=address
+          # One known leak inside libvirt itself. The file explains it.
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/lsan-suppressions.txt
         run: >-
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
           -p lodger-virt -- --ignored --exact events::tests::stress_ten_thousand_events
