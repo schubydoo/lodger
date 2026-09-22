@@ -1,8 +1,8 @@
 # Lodger web app
 
-The SvelteKit single-page app for Lodger. The Rust binary embeds the static build
-from `web/build`, so a Lodger install never needs Node. Node and pnpm are needed only
-to build and develop this app.
+The SvelteKit single-page app for Lodger. The Rust binary will embed the static build
+from `web/build`, so that a Lodger install never needs Node. That embedding is not in
+place yet. Node and pnpm are needed only to build and develop this app.
 
 - Node: the version in `../.node-version`
 - pnpm: the version in the `packageManager` field of `package.json`, through corepack
