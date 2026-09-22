@@ -22,3 +22,21 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "unwind"
+
+# Lints ported from podspine. Every crate opts in with `[lints] workspace = true`.
+[workspace.lints.clippy]
+# Identifiers in doc comments must have backticks.
+doc_markdown = "warn"
+# Each `unsafe` block must have a `// SAFETY:` comment. Lodger allows `unsafe`
+# only in crates/lodger-virt/src/events/ffi.rs (a CI guard enforces the place);
+# this lint enforces the justification.
+undocumented_unsafe_blocks = "warn"
+
+[workspace.lints.rustdoc]
+# Each [`item`] link in doc comments must resolve. Fires only under `cargo doc`
+# (the "Docs (deny warnings)" CI step), not under clippy.
+broken_intra_doc_links = "deny"
+# The CI doc step passes `--document-private-items` because this workspace is a
+# binary, not a library. Links from public items to private items are therefore
+# valid and stay clickable.
+private_intra_doc_links = "allow"

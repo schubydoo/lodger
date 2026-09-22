@@ -1,0 +1,8 @@
+# Default owner for everything.
+* @schubydoo
+
+# Renovate-managed; intentionally unowned so dependency and action bumps don't
+# require code-owner review (a no-op today at 0 required approvals, but
+# future-proof).
+/Cargo.lock
+/.github/workflows/

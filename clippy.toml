@@ -1,0 +1,3 @@
+# Words that `clippy::doc_markdown` must not flag as unbackticked code.
+# ".." keeps clippy's built-in list. Add only real words and acronyms here.
+doc-valid-idents = ["QEMU", "KVM", "SQLite", "SvelteKit", "WebSocket", ".."]
