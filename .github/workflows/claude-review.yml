@@ -1,7 +1,7 @@
 name: Claude Code Review
 
-# Ported from scratchsmith. Lodger difference: no `--model` argument, so the
-# action uses its default model.
+# Ported from scratchsmith. Lodger difference: `--model opus` (the alias, not a
+# pinned ID), so reviews follow the newest Opus release.
 
 # On-demand PR review. NEVER fires automatically — the maintainer starts it by
 # commenting "@claude review" on a pull request, and nobody else can (see the `if:`).
@@ -304,7 +304,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
+        uses: anthropics/claude-code-action@9ca9355b36297178e28d37c799d1c9c8a28e6507
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           trigger_phrase: "@claude review"
@@ -340,12 +340,15 @@ jobs:
           # its own, splitting one review into one-per-finding. The grouped POST is the only
           # anchor path; the guard step below detects a split by the submitted-review delta.
           #
+          # --model opus: without it, the action runs its default model, which is not
+          # Opus. A full model ID would stay on that one release; the alias moves forward.
           # --max-turns is a review-QUALITY setting (reading a multi-file diff + anchoring
           # findings + one grouped review costs many turns); 150 keeps headroom inside the
           # 30-min job timeout.
           # --plugin-dir loads the Simple English plugin checked out above (its output style
           # is selected by the `settings:` input); never set `--permission-mode` (see above).
           claude_args: |
+            --model opus
             --max-turns 150
             --add-dir pr-head
             --add-dir ${{ steps.rules.outputs.dir }}
