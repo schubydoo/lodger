@@ -44,8 +44,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install libvirt-dev
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      # llvm brings llvm-symbolizer. Without it, the leak report has no function
+      # names, and the `leak:virClassNew` suppression cannot match.
+      - name: Install libvirt-dev and llvm
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config llvm
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: nightly
