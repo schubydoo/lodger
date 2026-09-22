@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/lodger-core", "crates/lodger-virt", "crates/lodger"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/schubydoo/lodger"
+publish = false
+
+[workspace.dependencies]
+lodger-core = { path = "crates/lodger-core" }
+lodger-virt = { path = "crates/lodger-virt" }
+# Reviewed main-branch commit, not a crates.io release. See docs/virt-pin.md
+# before changing this pin. Upstream's last release is 0.4.3 (2025-08-21).
+virt = { git = "https://gitlab.com/libvirt/libvirt-rust.git", rev = "0bd0cbffce4dd914e76d74e4de480bf95fabdc98" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"
