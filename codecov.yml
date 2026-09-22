@@ -74,6 +74,7 @@ component_management:
       name: lodger-core (XML, seed disks, input checks)
       paths:
         - crates/lodger-core/src/lib.rs
+        - crates/lodger-core/src/model/host.rs
         - crates/lodger-core/src/model/mod.rs
         - crates/lodger-core/src/model/network.rs
         - crates/lodger-core/src/model/pool.rs
@@ -92,6 +93,8 @@ component_management:
     - component_id: lodger
       name: lodger (server, web assets, CLI)
       paths:
+        - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
         - crates/lodger/src/cli.rs
         - crates/lodger/src/server.rs
+        - crates/lodger/src/ws.rs

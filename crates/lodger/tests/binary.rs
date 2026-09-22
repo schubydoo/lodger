@@ -5,6 +5,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 
+/// libvirt's built-in test driver: it runs inside the process, so CI needs
+/// no libvirtd.
+const TEST_URI: &str = "test:///default";
+
 fn lodger() -> Command {
     Command::new(env!("CARGO_BIN_EXE_lodger"))
 }
@@ -35,7 +39,7 @@ fn serve_fails_cleanly_when_the_address_is_taken() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = taken.local_addr().unwrap();
     let out = lodger()
-        .args(["serve", "--listen", &addr.to_string()])
+        .args(["serve", "--listen", &addr.to_string(), "--uri", TEST_URI])
         .output()
         .expect("lodger runs");
     assert_eq!(out.status.code(), Some(1));
@@ -68,7 +72,7 @@ impl Drop for Server {
 
 fn start() -> (Server, String) {
     let mut child = lodger()
-        .args(["serve", "--listen", "127.0.0.1:0"])
+        .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
         .stdout(Stdio::piped())
         .spawn()
         .expect("lodger serve starts");
@@ -107,8 +111,29 @@ fn serve_answers_app_routes_and_reserves_api_and_ws() {
     );
     assert!(http_get(&addr, "/vms/web1").starts_with("HTTP/1.1 200"));
     assert!(http_get(&addr, "/missing.js").starts_with("HTTP/1.1 404"));
-    assert!(http_get(&addr, "/api/vms").starts_with("HTTP/1.1 404"));
-    assert!(http_get(&addr, "/ws/events").starts_with("HTTP/1.1 404"));
+    assert!(http_get(&addr, "/api/missing").starts_with("HTTP/1.1 404"));
+    assert!(http_get(&addr, "/ws/missing").starts_with("HTTP/1.1 404"));
+    server.stop();
+}
+
+#[test]
+fn serve_lists_the_test_driver_vms() {
+    let (mut server, addr) = start();
+    // The supervisor connects in the background. Wait for the first load.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let body = loop {
+        let reply = http_get(&addr, "/api/vms");
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        if reply.contains(r#""name":"test""#) {
+            break reply;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no VMs after 5 s: {reply}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(body.contains(r#""state":"running""#), "{body}");
     server.stop();
 }
 

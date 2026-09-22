@@ -8,12 +8,19 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 clap = { version = "4.6.7", features = ["derive"] }
 lodger-core.workspace = true
 lodger-virt.workspace = true
 rust-embed = { version = "8.12.0", features = ["mime-guess"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+uuid = { version = "1.26.1", features = ["serde"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+futures-util = "0.3.34"
+tokio-tungstenite = "0.29.0"
