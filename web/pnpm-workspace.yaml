@@ -1,7 +1,3 @@
-minimumReleaseAgeExclude:
-  - '@tabler/icons-svelte@3.48.0'
-  - '@tabler/icons@3.48.0'
-
 # pnpm settings for Lodger's web app (pnpm 12).
 #
 # trustPolicy no-downgrade: refuse a package version that was published with
