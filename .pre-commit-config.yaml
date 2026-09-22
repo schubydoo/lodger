@@ -1,0 +1,91 @@
+# Lodger pre-commit: the shift-left quality gate, ported from podspine.
+#
+#   commit stage : fast hygiene + fmt --check + clippy (-D warnings) + lib unit tests (seconds)
+#   push stage   : full workspace test suite, cargo audit, and cargo deny
+#
+# cargo audit and cargo deny need the online advisory DB, and `language: system`
+# means both binaries must be on PATH: `cargo install cargo-audit cargo-deny`.
+# The cargo hooks also need libvirt-dev, like CI. Hook commands mirror
+# .github/workflows/ci.yml, so the local gate and CI never drift.
+# Install with `pre-commit install`. Bypass a hook deliberately with SKIP=<id>
+# or --no-verify.
+minimum_pre_commit_version: "3.2.0"
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '^LICENSE$'          # keep the Apache-2.0 text byte-exact
+      - id: end-of-file-fixer
+        exclude: '^LICENSE$'
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: local
+    hooks:
+      # Guard: knope changeset fragments must have front matter and a
+      # single-line body. Otherwise the release fails ("missing front matter"),
+      # or the changelog renders a `#### heading` mid-list instead of a
+      # bullet. This runs when a fragment changes.
+      - id: changeset-lint
+        name: changeset fragment lint (knope one-line body)
+        entry: sh scripts/lint_changesets.sh
+        language: system
+        files: '^\.changeset/.+\.md$'
+        pass_filenames: false
+
+      # ---- commit stage: fast feedback on every commit ----
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy (deny warnings)
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test-unit
+        name: cargo test (lib unit tests)
+        entry: cargo test --workspace --lib
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # ---- push stage: full suite before code leaves the machine ----
+      - id: cargo-test-full
+        name: cargo test (full workspace suite)
+        entry: cargo test --workspace --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+      # Supply-chain checks mirror CI's supply-chain job. No `types` filter:
+      # advisories and licenses can change independent of the source files.
+      # They need network access.
+      - id: cargo-audit
+        name: cargo audit (RustSec advisories)
+        entry: cargo audit
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-deny
+        name: cargo deny (licenses/bans/sources/advisories)
+        entry: cargo deny check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

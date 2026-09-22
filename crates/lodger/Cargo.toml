@@ -10,3 +10,6 @@ publish.workspace = true
 [dependencies]
 lodger-core.workspace = true
 lodger-virt.workspace = true
+
+[lints]
+workspace = true
