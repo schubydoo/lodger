@@ -1,0 +1,8 @@
+# LeakSanitizer suppressions for the event glue stress test (.github/workflows/nightly.yml).
+# Keep this list short: each entry hides real leaks at that site. The entries match
+# function names, so the job must have llvm-symbolizer (the llvm package).
+#
+# libvirt 10.0 (Ubuntu 24.04) creates its object classes once per process, in virOnce
+# from virGetConnect, and never frees them: 4 classes and their names, 263 bytes. The
+# size does not grow with the number of events. libvirt 11.3 does not report it.
+leak:virClassNew

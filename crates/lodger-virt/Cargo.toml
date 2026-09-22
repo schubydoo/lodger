@@ -11,6 +11,7 @@ publish.workspace = true
 lodger-core.workspace = true
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt", "sync"] }
+uuid = "1.26.1"
 virt.workspace = true
 
 [dev-dependencies]
