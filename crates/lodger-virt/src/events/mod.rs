@@ -160,37 +160,51 @@ mod tests {
         assert!(closed.is_ok(), "libvirt did not free every registration");
     }
 
-    /// The stress test under `AddressSanitizer` (TAD section 9.3). It runs in the
-    /// nightly workflow, and by hand with:
+    /// The stress test. It also runs under `AddressSanitizer` in the nightly
+    /// workflow (TAD section 9.3), and by hand with:
     ///
     /// ```text
     /// RUSTFLAGS=-Zsanitizer=address \
     /// LSAN_OPTIONS=suppressions=$PWD/.github/lsan-suppressions.txt \
     ///   cargo +nightly test -Zbuild-std \
-    ///   --target x86_64-unknown-linux-gnu -p lodger-virt -- --ignored stress
+    ///   --target x86_64-unknown-linux-gnu -p lodger-virt -- --exact \
+    ///   events::tests::stress_ten_thousand_events
     /// ```
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "slow; runs under AddressSanitizer in the nightly workflow"]
     async fn stress_ten_thousand_events() {
         const EVENTS: usize = 10_000;
-        let virt = Virt::open(TEST_URI).await.unwrap();
+        // A test driver loaded from a file gets state of its own for each
+        // connection. The flood of events then reaches only this hub, and
+        // not the hubs of the tests that share `test:///default`.
+        let file = std::env::temp_dir().join(format!("lodger-stress-{}.xml", std::process::id()));
+        std::fs::write(&file, "<node/>").unwrap();
+        let virt = Virt::open(&format!("test://{}", file.display()))
+            .await
+            .unwrap();
         let mut rx = virt.subscribe();
-        let (_outside, domain) = define("lodger-spike-events-stress");
-        let id = uuid_of(&domain);
 
         // Each cycle sends STARTED and STOPPED. Other handles open and drop
         // on the way, so registration and the free callback run many times.
-        let driver = tokio::task::spawn_blocking(move || {
-            for cycle in 0..EVENTS / 2 {
-                domain.create().unwrap();
-                domain.destroy().unwrap();
-                if cycle % 50 == 0 {
-                    let rt = tokio::runtime::Handle::current();
-                    drop(rt.block_on(Virt::open(TEST_URI)).unwrap());
-                }
-            }
-            domain.undefine().unwrap();
-        });
+        let driver = {
+            let virt = virt.clone();
+            tokio::spawn(async move {
+                virt.read(|c| {
+                    let xml = "<domain type='test'><name>lodger-spike-events-stress</name>\
+                               <memory>65536</memory><os><type>hvm</type></os></domain>";
+                    let domain = c.define_domain_xml(xml)?;
+                    for cycle in 0..EVENTS / 2 {
+                        domain.create()?;
+                        domain.destroy()?;
+                        if cycle % 50 == 0 {
+                            let rt = tokio::runtime::Handle::current();
+                            drop(rt.block_on(Virt::open(TEST_URI)).unwrap());
+                        }
+                    }
+                    domain.undefine()
+                })
+                .await
+            })
+        };
 
         let mut seen = 0;
         while seen < EVENTS {
@@ -198,12 +212,16 @@ mod tests {
                 .await
                 .expect("the events stopped")
             {
-                Ok(Event::Domain { id: got, .. }) if got == id => seen += 1,
+                Ok(Event::Domain {
+                    change: DomainChange::Lifecycle { .. },
+                    ..
+                }) => seen += 1,
                 Ok(_) => {}
                 Err(RecvError::Lagged(n)) => seen += usize::try_from(n).unwrap(),
                 Err(RecvError::Closed) => panic!("the hub closed"),
             }
         }
-        driver.await.unwrap();
+        driver.await.unwrap().unwrap();
+        std::fs::remove_file(file).unwrap();
     }
 }
