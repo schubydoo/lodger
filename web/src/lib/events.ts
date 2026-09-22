@@ -60,8 +60,9 @@ export interface EventSocketOptions {
 }
 
 /**
- * Keeps one WebSocket open and reconnects after a close. After each
- * reconnect it fetches every query again, because events may have been
+ * Keeps one WebSocket open and reconnects after a close. Each time the
+ * socket opens, the first time too, it fetches every query again. Pages
+ * fetch before the socket opens, and events may have been
  * missed while the socket was closed.
  */
 export function connectEvents(options: EventSocketOptions): () => void {
@@ -70,13 +71,11 @@ export function connectEvents(options: EventSocketOptions): () => void {
 	let attempt = 0;
 	let stopped = false;
 	let socket: WebSocket | null = null;
-	let opened = false;
 
 	const open = () => {
 		socket = create(options.url);
 		socket.onopen = () => {
-			if (opened) void options.client.invalidateQueries();
-			opened = true;
+			void options.client.invalidateQueries();
 			attempt = 0;
 			options.onOpenChange?.(true);
 		};

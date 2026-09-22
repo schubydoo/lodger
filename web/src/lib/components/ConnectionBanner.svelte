@@ -30,10 +30,12 @@
 	});
 </script>
 
-<!-- role="alert" makes screen readers announce the banner when it appears. -->
-<div role="alert" aria-live="assertive">
+<!-- role="alert" makes screen readers announce the banner when it appears.
+     The region stays in the page, so it exists before its content does. -->
+<div role="alert">
 	{#if problem}
-		<Alert.Root variant="destructive" class="rounded-none border-x-0 border-t-0">
+		<!-- role={null}: the wrapper is the one alert region, not this box. -->
+		<Alert.Root variant="destructive" role={null} class="rounded-none border-x-0 border-t-0">
 			<Unplug aria-hidden="true" />
 			<Alert.Title>{problem.title}</Alert.Title>
 			<Alert.Description>{problem.detail}</Alert.Description>

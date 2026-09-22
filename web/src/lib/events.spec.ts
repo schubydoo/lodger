@@ -100,10 +100,19 @@ describe('connectEvents', () => {
 		expect(t.invalidateQueries).toHaveBeenCalledWith();
 	});
 
+	it('refetches everything when the socket first opens', () => {
+		const t = setup();
+		expect(t.invalidateQueries).not.toHaveBeenCalled();
+		// The page fetched before the socket opened. A change in between
+		// sends no event, so the open itself must refetch.
+		t.sockets[0].onopen?.();
+		expect(t.invalidateQueries).toHaveBeenCalledWith();
+	});
+
 	it('reconnects after a close and then refetches everything', () => {
 		const t = setup();
 		t.sockets[0].onopen?.();
-		expect(t.invalidateQueries).not.toHaveBeenCalled();
+		t.invalidateQueries.mockClear();
 
 		t.sockets[0].onclose?.();
 		expect(t.opens).toEqual([true, false]);
