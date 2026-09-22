@@ -1,5 +1,7 @@
-//! The VNC display of a domain, reached through a socket pair, so no VNC
-//! port opens on the host (TAD section 4.3).
+//! The VNC display of a domain, reached through a socket pair, so Lodger
+//! needs no VNC port on the host (TAD section 4.3). A VM whose XML gives
+//! VNC a `listen` address still opens its own port in QEMU; only VMs with
+//! `<listen type='none'/>` have none.
 //!
 //! Lodger makes the pair itself and hands one end to libvirt with
 //! `virDomainOpenGraphics`. libvirt passes a copy to QEMU, and Lodger keeps

@@ -14,11 +14,16 @@
 	let rfb = $state<RFB>();
 	let status = $state<ConsoleStatus>('connecting');
 
+	// The UUID to connect to, or `undefined` while the VM does not run. A
+	// string compares by value, so a change to another field of the VM, such
+	// as its memory, does not reconnect the console.
+	const target = $derived(vm?.state === 'running' ? vm.uuid : undefined);
+
 	// Connect once the VM is known to run. The socket closes when the page
 	// goes away, and the server then closes the display socket too.
 	$effect(() => {
-		if (!screen || vm?.state !== 'running') return;
-		const client = new RFB(screen, vncUrl(window.location, vm.uuid), {
+		if (!screen || !target) return;
+		const client = new RFB(screen, vncUrl(window.location, target), {
 			wsProtocols: ['binary']
 		});
 		client.scaleViewport = true;
