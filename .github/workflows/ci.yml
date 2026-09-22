@@ -114,6 +114,7 @@ jobs:
           files: target/nextest/ci/junit.xml
           disable_search: true
           report_type: test_results
+          flags: rust
           fail_ci_if_error: false
 
   coverage:
@@ -192,8 +193,11 @@ jobs:
         run: pnpm run lint
       - name: svelte-check
         run: pnpm run check
+      # The junit report feeds Codecov Test Analytics under the `ui` flag.
       - name: Test with coverage
-        run: pnpm run test:coverage
+        run: >-
+          pnpm run test:coverage --reporter=default --reporter=junit
+          --outputFile.junit=test-results/junit.xml
       - name: Build
         run: pnpm run build
       # Fails on a high or critical advisory. Lower severities show in the log.
@@ -207,6 +211,16 @@ jobs:
         with:
           files: web/coverage/lcov.info
           disable_search: true
+          flags: ui
+          fail_ci_if_error: false
+      # Uploads even on failure, like the Rust test results in the `test` job.
+      - name: Upload UI test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: web/test-results/junit.xml
+          disable_search: true
+          report_type: test_results
           flags: ui
           fail_ci_if_error: false
 
