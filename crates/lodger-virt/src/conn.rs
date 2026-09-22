@@ -41,6 +41,17 @@ pub enum Error {
     /// The closure panicked, or the runtime shut down before it ran.
     #[error("the libvirt call did not finish: {0}")]
     Task(#[from] tokio::task::JoinError),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl Error {
+    /// `true` when libvirt has no domain, pool, or network with that ID.
+    pub fn is_not_found(&self) -> bool {
+        use virt::error::ErrorNumber::{NoDomain, NoNetwork, NoStoragePool};
+        matches!(self, Self::Libvirt(e)
+            if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool)))
+    }
 }
 
 /// Registers libvirt's default event loop once per process and runs it on

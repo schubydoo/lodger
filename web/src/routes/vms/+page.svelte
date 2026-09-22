@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { createQuery } from '@tanstack/svelte-query';
 	import * as Table from '$lib/components/ui/table';
 	import StateBadge from '$lib/components/StateBadge.svelte';
@@ -29,6 +30,7 @@
 				<Table.Head scope="col" class="text-right">vCPUs</Table.Head>
 				<Table.Head scope="col" class="text-right">Memory</Table.Head>
 				<Table.Head scope="col">Autostart</Table.Head>
+				<Table.Head scope="col"><span class="sr-only">Actions</span></Table.Head>
 			</Table.Row>
 		</Table.Header>
 		<Table.Body>
@@ -44,6 +46,19 @@
 					<Table.Cell class="text-right tabular-nums">{vm.vcpus}</Table.Cell>
 					<Table.Cell class="text-right tabular-nums">{formatKib(vm.memory_kib)}</Table.Cell>
 					<Table.Cell>{vm.autostart ? 'Yes' : 'No'}</Table.Cell>
+					<Table.Cell>
+						{#if vm.state === 'running'}
+							<!-- The label names the VM, and it contains the visible
+							     word, as WCAG 2.5.3 (label in name) asks. -->
+							<a
+								href={resolve('/vms/[name]/console', { name: vm.name })}
+								aria-label="Console of {vm.name}"
+								class="rounded-sm text-sm underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+							>
+								Console
+							</a>
+						{/if}
+					</Table.Cell>
 				</Table.Row>
 			{/each}
 		</Table.Body>

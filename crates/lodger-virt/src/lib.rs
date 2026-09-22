@@ -2,6 +2,7 @@
 
 mod cache;
 mod conn;
+mod console;
 mod events;
 mod supervisor;
 

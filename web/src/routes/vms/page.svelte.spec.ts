@@ -28,6 +28,15 @@ describe('the VM list', () => {
 		expect(beta.getByText('(transient)')).toBeInTheDocument();
 	});
 
+	it('links the console of each running VM, and only of running ones', () => {
+		show((c) => c.setQueryData(keys.vms, vms));
+		expect(screen.getByRole('link', { name: 'Console of alpha' })).toHaveAttribute(
+			'href',
+			'/vms/alpha/console'
+		);
+		expect(screen.queryByRole('link', { name: 'Console of beta' })).toBeNull();
+	});
+
 	it('puts the table in a named region that a keyboard can focus', () => {
 		show((c) => c.setQueryData(keys.vms, vms));
 		const region = screen.getByRole('region', { name: 'Virtual machines' });

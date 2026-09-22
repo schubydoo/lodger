@@ -11,7 +11,7 @@ use axum::routing::{any, get};
 use lodger_virt::Host;
 
 use crate::assets::{self, Embedded};
-use crate::{api, ws};
+use crate::{api, console, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -27,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
         .route("/ws/events", get(ws::events))
+        .route("/ws/vms/{id}/vnc", get(console::vnc))
         .route("/api", any(reserved))
         .route("/api/{*rest}", any(reserved))
         .route("/ws", any(reserved))
@@ -105,6 +106,11 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+        serve_host(host).await
+    }
+
+    /// Serves the router for `host` as it is, connected or not.
+    async fn serve_host(host: Arc<Host>) -> (String, Arc<Host>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let app = router(AppState {
@@ -284,6 +290,49 @@ mod tests {
         req.headers_mut()
             .insert("origin", format!("http://{addr}").parse().unwrap());
         assert!(tokio_tungstenite::connect_async(req).await.is_ok());
+    }
+
+    /// Opens `/ws/vms/{id}/vnc` and returns the HTTP status of a refusal.
+    async fn vnc_refusal(addr: &str, id: &str, origin: Option<&str>) -> u16 {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = format!("ws://{addr}/ws/vms/{id}/vnc")
+            .into_client_request()
+            .unwrap();
+        if let Some(origin) = origin {
+            req.headers_mut().insert("origin", origin.parse().unwrap());
+        }
+        match tokio_tungstenite::connect_async(req).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => resp.status().as_u16(),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_vnc_socket_refuses_what_it_cannot_open() {
+        let (addr, host) = serve().await;
+        let unknown = "00000000-0000-0000-0000-000000000000";
+        assert_eq!(
+            vnc_refusal(&addr, unknown, Some("http://evil.example")).await,
+            403
+        );
+        assert_eq!(vnc_refusal(&addr, unknown, None).await, 404);
+        // The test driver has no display to open, so libvirt refuses.
+        let test = host
+            .inventory()
+            .vms
+            .into_values()
+            .find(|vm| vm.name == "test")
+            .unwrap();
+        assert_eq!(vnc_refusal(&addr, &test.uuid.to_string(), None).await, 409);
+    }
+
+    #[tokio::test]
+    async fn the_vnc_socket_answers_503_while_libvirt_is_down() {
+        let missing = std::env::temp_dir().join("lodger-no-such-driver.xml");
+        let host = Arc::new(Host::start(&format!("test://{}", missing.display())).unwrap());
+        let (addr, _host) = serve_host(host).await;
+        let any = "00000000-0000-0000-0000-000000000000";
+        assert_eq!(vnc_refusal(&addr, any, None).await, 503);
     }
 
     #[tokio::test]

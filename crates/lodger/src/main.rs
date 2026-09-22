@@ -3,6 +3,7 @@
 mod api;
 mod assets;
 mod cli;
+mod console;
 mod server;
 mod ws;
 

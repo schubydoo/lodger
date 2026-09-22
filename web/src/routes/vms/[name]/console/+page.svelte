@@ -1,0 +1,74 @@
+<script lang="ts">
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { createQuery } from '@tanstack/svelte-query';
+	import RFB from '@novnc/novnc';
+	import { fetchVms, keys } from '$lib/api';
+	import { statusText, vncUrl, type ConsoleStatus } from '$lib/console';
+
+	const name = $derived(page.params.name ?? '');
+	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
+	const vm = $derived(vms.data?.find((v) => v.name === name));
+
+	let screen = $state<HTMLDivElement>();
+	let rfb = $state<RFB>();
+	let status = $state<ConsoleStatus>('connecting');
+
+	// Connect once the VM is known to run. The socket closes when the page
+	// goes away, and the server then closes the display socket too.
+	$effect(() => {
+		if (!screen || vm?.state !== 'running') return;
+		const client = new RFB(screen, vncUrl(window.location, vm.uuid), {
+			wsProtocols: ['binary']
+		});
+		client.scaleViewport = true;
+		client.background = 'transparent';
+		client.addEventListener('connect', () => (status = 'connected'));
+		client.addEventListener('disconnect', (e) => {
+			status = (e as CustomEvent<{ clean: boolean }>).detail.clean ? 'closed' : 'failed';
+		});
+		status = 'connecting';
+		rfb = client;
+		return () => {
+			rfb = undefined;
+			client.disconnect();
+		};
+	});
+</script>
+
+<svelte:head><title>{name} console · Lodger</title></svelte:head>
+
+<div class="mb-4 flex flex-wrap items-center gap-4">
+	<h1 class="text-2xl font-semibold">{name}</h1>
+	<a href={resolve('/vms')} class="text-sm underline underline-offset-4">Back to the list</a>
+</div>
+
+{#if vms.isPending}
+	<p>Loading…</p>
+{:else if vms.isError}
+	<p role="alert">Could not load the virtual machines: {vms.error.message}</p>
+{:else if !vm}
+	<p role="alert">No virtual machine is called {name}.</p>
+{:else if vm.state !== 'running'}
+	<p>{name} is not running, so it has no screen to show.</p>
+{:else}
+	<div class="mb-3 flex flex-wrap items-center gap-4">
+		<p role="status" class="text-sm text-muted-foreground">{statusText(status)}</p>
+		<button
+			type="button"
+			class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
+			disabled={status !== 'connected'}
+			onclick={() => rfb?.sendCtrlAltDel()}
+		>
+			Send Ctrl+Alt+Del
+		</button>
+	</div>
+	<!-- noVNC draws a canvas here. The canvas shows only pixels, so it cannot
+	     meet WCAG (PRD 5.4); the serial console is the text path. -->
+	<div
+		bind:this={screen}
+		aria-label="Screen of {name}"
+		role="application"
+		class="h-[70vh] w-full overflow-hidden rounded-md border bg-black"
+	></div>
+{/if}
