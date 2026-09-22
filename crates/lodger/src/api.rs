@@ -43,8 +43,11 @@ impl From<ConnState> for Connection {
 #[derive(Debug, Serialize)]
 pub struct Host {
     pub connection: Connection,
-    /// `None` while Lodger is not connected.
+    /// `None` while Lodger is not connected, or when the read failed.
     pub info: Option<HostInfo>,
+    /// Why `info` is `None` although Lodger is connected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info_error: Option<String>,
     pub vms: VmCounts,
     pub pools: usize,
     pub networks: usize,
@@ -57,14 +60,21 @@ pub struct VmCounts {
 }
 
 pub async fn host(State(state): State<AppState>) -> Json<Host> {
+    // Take the state, the inventory, and the connections at one moment,
+    // before the libvirt call waits.
+    let connection = state.host.state().into();
     let inventory = state.host.inventory();
-    let info = match state.host.virt() {
-        Some(virt) => virt.host_info().await.ok(),
-        None => None,
+    let (info, info_error) = match state.host.virt() {
+        Some(virt) => match virt.host_info().await {
+            Ok(info) => (Some(info), None),
+            Err(e) => (None, Some(e.to_string())),
+        },
+        None => (None, None),
     };
     Json(Host {
-        connection: state.host.state().into(),
+        connection,
         info,
+        info_error,
         vms: VmCounts {
             total: inventory.vms.len(),
             running: inventory

@@ -236,6 +236,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_page_from_another_origin_cannot_open_the_socket() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let (addr, _host) = serve().await;
+        let mut req = format!("ws://{addr}/ws/events")
+            .into_client_request()
+            .unwrap();
+        req.headers_mut()
+            .insert("origin", "http://evil.example".parse().unwrap());
+        let err = tokio_tungstenite::connect_async(req).await.unwrap_err();
+        let tokio_tungstenite::tungstenite::Error::Http(resp) = err else {
+            panic!("expected an HTTP refusal, got {err:?}");
+        };
+        assert_eq!(resp.status(), 403);
+
+        let mut req = format!("ws://{addr}/ws/events")
+            .into_client_request()
+            .unwrap();
+        req.headers_mut()
+            .insert("origin", format!("http://{addr}").parse().unwrap());
+        assert!(tokio_tungstenite::connect_async(req).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn the_server_ignores_client_text_and_ends_on_close() {
         use futures_util::SinkExt;
         let (addr, _host) = serve().await;
