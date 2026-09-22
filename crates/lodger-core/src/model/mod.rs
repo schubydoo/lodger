@@ -1,0 +1,21 @@
+//! Model types for the objects that Lodger shows: VMs, storage pools, volumes,
+//! networks, and snapshots.
+//!
+//! Names here are plain strings, because other tools can give libvirt objects
+//! names outside Lodger's allowlist. The UI shows them only as text. New names
+//! from users go through [`crate::validate::Name`].
+//!
+//! The `from_code` functions map libvirt's C enum values. An unknown value from
+//! a newer libvirt becomes `Unknown` instead of a panic.
+
+mod network;
+mod pool;
+mod snapshot;
+mod vm;
+mod volume;
+
+pub use network::Network;
+pub use pool::{Pool, PoolState};
+pub use snapshot::Snapshot;
+pub use vm::{Vm, VmState};
+pub use volume::{Volume, VolumeKind};
