@@ -5,6 +5,7 @@ import { codecovSvelteKitPlugin } from '@codecov/sveltekit-plugin';
 import { notices } from './notices.ts';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
+import type { Plugin } from 'vite';
 
 export default defineConfig({
 	plugins: [
@@ -39,12 +40,20 @@ export default defineConfig({
 		// uploads bundle sizes during `pnpm build`, and only on GitHub Actions,
 		// so a local build sends nothing. The repository is public, so GitHub
 		// Actions needs no upload token (Codecov's tokenless upload).
-		codecovSvelteKitPlugin({
+		//
+		// Only the client build counts. SvelteKit also builds a server bundle
+		// (the `ssr` environment), even with SSR off, but the binary embeds only
+		// `web/build`, so no browser ever loads it. The plugin has no option to
+		// skip it, so Vite's applyToEnvironment keeps it to the client.
+		...codecovSvelteKitPlugin({
 			enableBundleAnalysis: process.env.GITHUB_ACTIONS === 'true',
 			bundleName: 'lodger-web',
 			gitService: 'github',
 			telemetry: false
-		})
+		}).map((plugin): Plugin => ({
+			...(plugin as Plugin),
+			applyToEnvironment: (environment) => environment.name === 'client'
+		}))
 	],
 	// `pnpm dev` serves the UI with hot reload and sends API and WebSocket
 	// requests to a local `lodger serve` on its default port.
