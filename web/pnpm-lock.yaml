@@ -175,6 +175,9 @@ importers:
       '@fontsource-variable/inter':
         specifier: 5.3.0
         version: 5.3.0
+      '@internationalized/date':
+        specifier: 3.12.4
+        version: 3.12.4
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0
@@ -247,6 +250,12 @@ importers:
       shadcn-svelte:
         specifier: 1.7.0
         version: 1.7.0(svelte@5.57.1(@typescript-eslint/types@8.70.0))
+      spdx-expression-validate:
+        specifier: 2.0.0
+        version: 2.0.0
+      spdx-satisfies:
+        specifier: 5.0.1
+        version: 5.0.1
       svelte:
         specifier: 5.57.1
         version: 5.57.1(@typescript-eslint/types@8.70.0)

@@ -8,7 +8,7 @@ use axum::Router;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware;
 use axum::response::Response;
-use axum::routing::{any, get, post};
+use axum::routing::{any, delete, get, post};
 use ipnet::IpNet;
 use lodger_virt::Host;
 
@@ -18,7 +18,7 @@ use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
-use crate::{api, auth, console, security, ws};
+use crate::{accounts, api, auth, console, security, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -80,6 +80,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/vms/{id}", get(api::vm))
         .route("/api/session", get(auth::current).delete(auth::logout))
         .route("/api/ws-tickets", post(auth::issue_ticket))
+        .route("/api/accounts", get(accounts::list).post(accounts::create))
+        .route("/api/accounts/{id}", delete(accounts::delete))
+        .route("/api/account/password", post(accounts::change_password))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,
@@ -809,18 +812,191 @@ mod tests {
         }
     }
 
+    /// A logged-in browser tab: its cookie and CSRF token.
+    struct Tab {
+        cookie: String,
+        csrf: String,
+    }
+
+    async fn log_in_tab(addr: &str, username: &str, password: &str) -> Tab {
+        let (status, cookie, body) = login(addr, username, password).await;
+        assert_eq!(status, 200, "{body}");
+        let info: Value = serde_json::from_str(&body).unwrap();
+        Tab {
+            cookie: cookie.unwrap(),
+            csrf: info["csrf_token"].as_str().unwrap().to_owned(),
+        }
+    }
+
+    /// One API call from `tab`, as a Lodger page makes it.
+    async fn call(
+        addr: &str,
+        tab: &Tab,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (u16, Value) {
+        let mut headers = vec![
+            format!("Cookie: {}", tab.cookie),
+            SAME_ORIGIN.into(),
+            format!("X-CSRF-Token: {}", tab.csrf),
+        ];
+        if body.is_some() {
+            headers.push("Content-Type: application/json".into());
+        }
+        let text = body.map(|b| b.to_string()).unwrap_or_default();
+        let (status, out) = raw(addr, method, path, &headers, &text).await;
+        let body = body_of(&out);
+        (status, serde_json::from_str(&body).unwrap_or(Value::Null))
+    }
+
+    /// A server with the account `admin` and one logged-in tab for it.
+    async fn serve_admin() -> (String, Tab) {
+        let (addr, token, _state) = serve_setup().await;
+        let created = post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        assert_eq!(created.0, 201);
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        (addr, tab)
+    }
+
+    const OTHER_PASSWORD: &str = "a different good passphrase";
+
+    #[tokio::test]
+    async fn a_common_or_short_password_fails_with_a_clear_message() {
+        let (addr, tab) = serve_admin().await;
+        // On the list (`common.txt` line 1), in another case: the check
+        // ignores case.
+        let common = "DEMON1Q2W3E4R5T";
+        for (path, body) in [
+            (
+                "/api/accounts",
+                serde_json::json!({"username": "second", "password": common}),
+            ),
+            (
+                "/api/account/password",
+                serde_json::json!({"current_password": GOOD_PASSWORD, "new_password": common}),
+            ),
+        ] {
+            let (status, answer) = call(&addr, &tab, "POST", path, Some(body)).await;
+            assert_eq!(status, 422, "{path}");
+            assert_eq!(
+                answer["error"],
+                "the password is on the list of the most common passwords. Choose another one",
+                "{path}"
+            );
+        }
+        let short = serde_json::json!({"username": "second", "password": "too short"});
+        let (status, answer) = call(&addr, &tab, "POST", "/api/accounts", Some(short)).await;
+        assert_eq!(status, 422);
+        assert!(
+            answer["error"].as_str().unwrap().contains("at least 15"),
+            "{answer}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_account_logs_in_with_full_rights() {
+        let (addr, tab) = serve_admin().await;
+        let new = serde_json::json!({"username": "second", "password": OTHER_PASSWORD});
+        let (status, created) = call(&addr, &tab, "POST", "/api/accounts", Some(new.clone())).await;
+        assert_eq!(status, 201, "{created}");
+        // The name is unique without regard to case.
+        let again = serde_json::json!({"username": "SECOND", "password": OTHER_PASSWORD});
+        assert_eq!(
+            call(&addr, &tab, "POST", "/api/accounts", Some(again))
+                .await
+                .0,
+            409
+        );
+
+        let second = log_in_tab(&addr, "second", OTHER_PASSWORD).await;
+        assert_eq!(call(&addr, &second, "GET", "/api/vms", None).await.0, 200);
+        let (_, list) = call(&addr, &second, "GET", "/api/accounts", None).await;
+        let names: Vec<(&str, bool)> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| (a["username"].as_str().unwrap(), a["you"].as_bool().unwrap()))
+            .collect();
+        assert_eq!(names, [("admin", false), ("second", true)]);
+        assert!(list[0].get("password_hash").is_none(), "{list}");
+    }
+
+    #[tokio::test]
+    async fn deleting_the_last_account_fails_and_a_delete_ends_its_sessions() {
+        let (addr, tab) = serve_admin().await;
+        let (_, list) = call(&addr, &tab, "GET", "/api/accounts", None).await;
+        let admin_id = list[0]["id"].as_i64().unwrap();
+        let (status, answer) = call(
+            &addr,
+            &tab,
+            "DELETE",
+            &format!("/api/accounts/{admin_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, 409);
+        assert!(
+            answer["error"].as_str().unwrap().contains("last account"),
+            "{answer}"
+        );
+        assert_eq!(call(&addr, &tab, "GET", "/api/vms", None).await.0, 200);
+
+        let new = serde_json::json!({"username": "second", "password": OTHER_PASSWORD});
+        let (_, created) = call(&addr, &tab, "POST", "/api/accounts", Some(new)).await;
+        let second_id = created["id"].as_i64().unwrap();
+        let second = log_in_tab(&addr, "second", OTHER_PASSWORD).await;
+        let path = format!("/api/accounts/{second_id}");
+        assert_eq!(call(&addr, &tab, "DELETE", &path, None).await.0, 204);
+        // ASVS 7.4.2: the deleted account's session ends at once.
+        assert_eq!(call(&addr, &second, "GET", "/api/vms", None).await.0, 401);
+        assert_eq!(call(&addr, &tab, "DELETE", &path, None).await.0, 404);
+    }
+
+    #[tokio::test]
+    async fn a_password_change_needs_the_current_password_and_ends_other_sessions() {
+        let (addr, tab) = serve_admin().await;
+        let other_tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+
+        let wrong = serde_json::json!({
+            "current_password": "not the current one",
+            "new_password": OTHER_PASSWORD,
+        });
+        let (status, answer) =
+            call(&addr, &tab, "POST", "/api/account/password", Some(wrong)).await;
+        assert_eq!(status, 403, "{answer}");
+        // Nothing changed: both sessions still work.
+        assert_eq!(
+            call(&addr, &other_tab, "GET", "/api/vms", None).await.0,
+            200
+        );
+
+        let right = serde_json::json!({
+            "current_password": GOOD_PASSWORD,
+            "new_password": OTHER_PASSWORD,
+        });
+        let (status, answer) =
+            call(&addr, &tab, "POST", "/api/account/password", Some(right)).await;
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(answer["ended_sessions"], 1);
+        assert_eq!(call(&addr, &tab, "GET", "/api/vms", None).await.0, 200);
+        assert_eq!(
+            call(&addr, &other_tab, "GET", "/api/vms", None).await.0,
+            401
+        );
+        assert_eq!(login(&addr, "admin", GOOD_PASSWORD).await.0, 401);
+        assert_eq!(login(&addr, "admin", OTHER_PASSWORD).await.0, 200);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn the_sixth_failed_login_waits() {
-        let (addr, token, _state) = serve_setup().await;
+        let (addr, token, state) = serve_setup().await;
         post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
-        let mut slowest = Duration::ZERO;
         for _ in 0..5 {
-            let start = Instant::now();
             assert_eq!(
                 login(&addr, "admin", "wrong wrong wrong wrong").await.0,
                 401
             );
-            slowest = slowest.max(start.elapsed());
         }
         let start = Instant::now();
         assert_eq!(
@@ -832,9 +1008,17 @@ mod tests {
             sixth >= Duration::from_secs(1),
             "the sixth attempt took {sixth:?}"
         );
+        // The time above includes argon2, which the other tests slow down,
+        // because they share the limit of 2 runs. The throttle helper alone
+        // runs no argon2, so its time shows the wait itself.
+        let start = Instant::now();
+        let ip = "127.0.0.1".parse().unwrap();
+        let attempt = crate::auth::throttled(&state, "admin", ip).await.unwrap();
+        assert_eq!(attempt.wait, Duration::from_secs(2));
         assert!(
-            sixth > slowest,
-            "sixth {sixth:?}, slowest before {slowest:?}"
+            start.elapsed() >= Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
         );
     }
 

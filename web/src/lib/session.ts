@@ -3,30 +3,21 @@
 // session's CSRF token from GET /api/session.
 
 /**
- * Returns a function that fetches one ticket per call. It keeps the CSRF
- * token between calls. After a 403 it fetches the token once more, because a
- * new login replaces the session and its token.
+ * Returns a function that fetches one ticket per call. It reads the CSRF
+ * token each time, because a logout and a new login replace it: a kept token
+ * would fail once after every login.
  */
 export function ticketSource(fetcher: typeof fetch = fetch): () => Promise<string> {
-	let csrf: string | null = null;
-
-	const csrfToken = async (): Promise<string> => {
-		const res = await fetcher('/api/session', { headers: { accept: 'application/json' } });
-		if (!res.ok) throw new Error(`/api/session answered ${res.status} ${res.statusText}`);
-		return ((await res.json()) as { csrf_token: string }).csrf_token;
-	};
-
-	const request = async (): Promise<Response> => {
-		csrf ??= await csrfToken();
-		return fetcher('/api/ws-tickets', { method: 'POST', headers: { 'x-csrf-token': csrf } });
-	};
-
 	return async () => {
-		let res = await request();
-		if (res.status === 403) {
-			csrf = null;
-			res = await request();
+		const session = await fetcher('/api/session', { headers: { accept: 'application/json' } });
+		if (!session.ok) {
+			throw new Error(`/api/session answered ${session.status} ${session.statusText}`);
 		}
+		const { csrf_token: csrf } = (await session.json()) as { csrf_token: string };
+		const res = await fetcher('/api/ws-tickets', {
+			method: 'POST',
+			headers: { 'x-csrf-token': csrf }
+		});
 		if (!res.ok) throw new Error(`/api/ws-tickets answered ${res.status} ${res.statusText}`);
 		return ((await res.json()) as { ticket: string }).ticket;
 	};

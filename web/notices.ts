@@ -14,10 +14,36 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import license, { type Dependency } from 'rollup-plugin-license';
+import satisfies from 'spdx-satisfies';
+import validExpression from 'spdx-expression-validate';
 import type { Plugin } from 'vite';
 
 const ALLOWED =
 	'(MIT OR ISC OR Apache-2.0 OR BSD-2-Clause OR BSD-3-Clause OR 0BSD OR MPL-2.0 OR CC0-1.0)';
+
+/**
+ * Packages whose package.json names no license, with the license that their
+ * LICENSE file states. Each entry names one version and the start of the
+ * license text, so an update or a changed text fails the build again.
+ */
+const LICENSE_FIXES: Record<string, { license: string; textStart: string }> = {
+	// A bits-ui dependency. 0.10.6 is the latest release, and its LICENSE
+	// file is MIT (Hunter Johnston and Thomas G. Lopes).
+	'svelte-toolbelt@0.10.6': { license: 'MIT', textStart: 'MIT License' }
+};
+
+/** The SPDX license of a package, from package.json or from LICENSE_FIXES. */
+export function licenseOf(dep: Dependency): string | null {
+	if (dep.license) return dep.license;
+	const fix = LICENSE_FIXES[`${dep.name}@${dep.version}`];
+	return fix && dep.licenseText?.trim().startsWith(fix.textStart) ? fix.license : null;
+}
+
+/** Whether a package may go into the bundle: its license is in ALLOWED. */
+export function allowed(dep: Dependency): boolean {
+	const spdx = licenseOf(dep);
+	return spdx !== null && validExpression(spdx) && satisfies(spdx, ALLOWED);
+}
 
 const HEADER = `Lodger third-party notices
 ==========================
@@ -67,9 +93,9 @@ export function notices(root: string): Plugin[] {
 	return [
 		license({
 			thirdParty: {
-				allow: { test: ALLOWED, failOnUnlicensed: true, failOnViolation: true },
+				allow: { test: allowed, failOnUnlicensed: true, failOnViolation: true },
 				output: (deps) => {
-					packages = deps;
+					packages = deps.map((dep) => ({ ...dep, license: licenseOf(dep) }));
 				}
 			}
 		}) as Plugin,

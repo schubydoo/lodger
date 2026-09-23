@@ -17,24 +17,18 @@ describe('ticketSource', () => {
 		});
 	});
 
-	it('keeps the CSRF token between tickets', async () => {
-		const fetcher = vi.fn(async (path: RequestInfo | URL) =>
-			path === '/api/session' ? json({ csrf_token: 'c1' }) : json({ ticket: 't' }, 201)
-		);
+	it('reads the current CSRF token for each ticket, so a new login needs no retry', async () => {
+		const tokens = ['first', 'second'];
+		const sent: string[] = [];
+		const fetcher = vi.fn(async (path: RequestInfo | URL, init?: RequestInit) => {
+			if (path === '/api/session') return json({ csrf_token: tokens.shift() });
+			sent.push((init?.headers as Record<string, string>)['x-csrf-token']);
+			return json({ ticket: 't' }, 201);
+		});
 		const next = ticketSource(fetcher as typeof fetch);
 		await next();
 		await next();
-		expect(fetcher.mock.calls.filter(([p]) => p === '/api/session')).toHaveLength(1);
-	});
-
-	it('fetches the token again once after a 403', async () => {
-		const tokens = ['old', 'new'];
-		const fetcher = vi.fn(async (path: RequestInfo | URL, init?: RequestInit) => {
-			if (path === '/api/session') return json({ csrf_token: tokens.shift() });
-			const sent = (init?.headers as Record<string, string>)['x-csrf-token'];
-			return sent === 'new' ? json({ ticket: 't2' }, 201) : json({}, 403);
-		});
-		await expect(ticketSource(fetcher as typeof fetch)()).resolves.toBe('t2');
+		expect(sent).toEqual(['first', 'second']);
 	});
 
 	it('throws with the status when there is no session', async () => {
@@ -46,7 +40,7 @@ describe('ticketSource', () => {
 		);
 	});
 
-	it('throws when the token is still refused after the retry', async () => {
+	it('throws with the status when the ticket is refused', async () => {
 		const fetcher = vi.fn(async (path: RequestInfo | URL) =>
 			path === '/api/session' ? json({ csrf_token: 'c' }) : json({}, 403)
 		);
