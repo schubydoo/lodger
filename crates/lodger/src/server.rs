@@ -1,7 +1,6 @@
 //! The HTTP server: the API, the WebSocket, reserved prefixes, then the
 //! embedded web UI.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
@@ -11,18 +10,22 @@ use axum::routing::{any, get};
 use lodger_virt::Host;
 
 use crate::assets::{self, Embedded};
+use crate::config::Config;
+use crate::db::Db;
 use crate::{api, console, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub host: Arc<Host>,
+    pub db: Db,
 }
 
 /// Builds the router. Paths under `/api` and `/ws` without a handler answer
 /// 404, and they never fall through to the web UI.
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/api/health", get(api::health))
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
@@ -44,24 +47,50 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
     assets::respond(&Embedded, &method, uri.path(), &headers)
 }
 
-/// Starts the libvirt supervisor for `uri`, binds `listen`, prints the bound
-/// address, and serves until Ctrl-C or SIGTERM. A libvirt that cannot be
-/// reached does not stop the server: the API reports it as disconnected.
-pub async fn serve(listen: SocketAddr, uri: &str) -> Result<(), String> {
-    let host = Host::start(uri).map_err(|e| format!("cannot use {uri:?}: {e}"))?;
+/// Opens the database, starts the libvirt supervisor, binds the listen
+/// address, prints it, and serves until Ctrl-C or SIGTERM. A libvirt that
+/// cannot be reached does not stop the server: the API reports it as
+/// disconnected. A database that cannot be opened does.
+pub async fn serve(config: Config) -> Result<(), String> {
+    let db = Db::open(&config.state_dir).await?;
+    let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
     let state = AppState {
         host: Arc::new(host),
+        db,
     };
+    let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
+    // stdout carries only the address line, which scripts and tests read.
+    // Everything else goes to stderr, which systemd sends to the journal.
     println!(
         "lodger listening on http://{}",
         listener.local_addr().map_err(fail)?
     );
+    eprintln!("{}", summary(&config));
+    if !listen.ip().is_loopback() {
+        // TAD section 7.4: Lodger has no built-in TLS, and its API has no
+        // login yet (Task 2.3), so anyone who reaches the port controls it.
+        eprintln!(
+            "lodger: WARNING: listening on {listen}, which is not loopback. Put Lodger behind a \
+             reverse proxy with TLS and listen on 127.0.0.1 instead."
+        );
+    }
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(fail)
+}
+
+/// One line that says which settings are in force.
+fn summary(config: &Config) -> String {
+    format!(
+        "lodger: libvirt {}, state directory {}, public URL {}, {} trusted proxies",
+        config.uri,
+        config.state_dir.display(),
+        config.public_url.as_deref().unwrap_or("not set"),
+        config.trusted_proxies.len()
+    )
 }
 
 async fn shutdown_signal() {
@@ -115,6 +144,7 @@ mod tests {
         let addr = listener.local_addr().unwrap().to_string();
         let app = router(AppState {
             host: Arc::clone(&host),
+            db: crate::db::Db::in_memory().await,
         });
         tokio::spawn(async move { axum::serve(listener, app).await });
         (addr, host)
@@ -216,6 +246,31 @@ mod tests {
         assert_eq!(json["vms"], serde_json::json!({"total": 2, "running": 2}));
         assert_eq!(json["pools"], 0);
         assert_eq!(json["networks"], 0);
+    }
+
+    #[tokio::test]
+    async fn health_answers_with_fixed_words() {
+        let (addr, _host) = serve().await;
+        let (status, body) = get(&addr, "/api/health").await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            serde_json::json!({"status": "ok", "database": "ok", "libvirt": "connected"})
+        );
+    }
+
+    #[tokio::test]
+    async fn health_is_degraded_while_libvirt_is_down() {
+        let missing = std::env::temp_dir().join("lodger-no-such-driver.xml");
+        let host = Arc::new(Host::start(&format!("test://{}", missing.display())).unwrap());
+        let (addr, _host) = serve_host(host).await;
+        let (status, body) = get(&addr, "/api/health").await;
+        assert_eq!(status, 200);
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["status"], "degraded");
+        // No error text: the endpoint needs no login.
+        assert!(json["libvirt"] == "connecting" || json["libvirt"] == "disconnected");
+        assert!(!body.contains("lodger-no-such-driver"), "{body}");
     }
 
     #[tokio::test]

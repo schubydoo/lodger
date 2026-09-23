@@ -1,6 +1,7 @@
 //! Command-line interface.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -22,14 +23,23 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Serve the web UI and the API.
+    ///
+    /// Settings come from the configuration file; each flag overrides its key.
     Serve {
-        /// Address and port to listen on.
-        #[arg(long, default_value = DEFAULT_LISTEN)]
-        listen: SocketAddr,
-        /// libvirt connection URI. `test:///default` uses libvirt's built-in
-        /// test driver, which needs no libvirtd.
-        #[arg(long, default_value = DEFAULT_URI)]
-        uri: String,
+        /// Configuration file [default: /etc/lodger/config.toml, if it exists]
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Address and port to listen on [default: 127.0.0.1:8460]
+        #[arg(long)]
+        listen: Option<SocketAddr>,
+        /// libvirt connection URI [default: `qemu:///system`]. `test:///default`
+        /// uses libvirt's built-in test driver, which needs no libvirtd.
+        #[arg(long)]
+        uri: Option<String>,
+        /// Directory for the database [default: `$STATE_DIRECTORY` from systemd,
+        /// or /var/lib/lodger]
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
     },
     /// Print the Lodger version and the libvirt client library version.
     Version,
@@ -50,28 +60,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serve_defaults_to_loopback_port_8460() {
+    fn serve_leaves_unset_flags_to_the_configuration() {
         let cli = Cli::try_parse_from(["lodger", "serve"]).unwrap();
-        match cli.command {
-            Command::Serve { listen, uri } => {
-                assert!(listen.ip().is_loopback());
-                assert_eq!(listen.port(), 8460);
-                assert_eq!(uri, "qemu:///system");
+        assert!(matches!(
+            cli.command,
+            Command::Serve {
+                config: None,
+                listen: None,
+                uri: None,
+                state_dir: None
             }
-            Command::Version => panic!("expected serve"),
-        }
+        ));
     }
 
     #[test]
-    fn serve_accepts_a_listen_address() {
-        let cli = Cli::try_parse_from(["lodger", "serve", "--listen", "127.0.0.1:0"]).unwrap();
-        assert!(matches!(cli.command, Command::Serve { listen, .. } if listen.port() == 0));
+    fn serve_accepts_every_flag() {
+        let cli = Cli::try_parse_from([
+            "lodger",
+            "serve",
+            "--config",
+            "/c.toml",
+            "--listen",
+            "127.0.0.1:0",
+            "--uri",
+            "test:///default",
+            "--state-dir",
+            "/tmp/s",
+        ])
+        .unwrap();
+        let Command::Serve {
+            config,
+            listen,
+            uri,
+            state_dir,
+        } = cli.command
+        else {
+            panic!("expected serve");
+        };
+        assert_eq!(config.unwrap().to_str(), Some("/c.toml"));
+        assert_eq!(listen.unwrap().port(), 0);
+        assert_eq!(uri.as_deref(), Some("test:///default"));
+        assert_eq!(state_dir.unwrap().to_str(), Some("/tmp/s"));
     }
 
     #[test]
-    fn serve_accepts_a_libvirt_uri() {
-        let cli = Cli::try_parse_from(["lodger", "serve", "--uri", "test:///default"]).unwrap();
-        assert!(matches!(cli.command, Command::Serve { uri, .. } if uri == "test:///default"));
+    fn the_defaults_parse() {
+        let listen: SocketAddr = DEFAULT_LISTEN.parse().unwrap();
+        assert!(listen.ip().is_loopback());
+        assert_eq!(listen.port(), 8460);
+        assert_eq!(DEFAULT_URI, "qemu:///system");
     }
 
     #[test]

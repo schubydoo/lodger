@@ -3,7 +3,9 @@
 mod api;
 mod assets;
 mod cli;
+mod config;
 mod console;
+mod db;
 mod server;
 mod ws;
 
@@ -13,9 +15,25 @@ fn main() {
     let cli = cli::Cli::parse();
     let result = match cli.command {
         cli::Command::Version => cli::version_line().map(|line| println!("{line}")),
-        cli::Command::Serve { listen, uri } => tokio::runtime::Runtime::new()
-            .map_err(|e| format!("cannot start the async runtime: {e}"))
-            .and_then(|rt| rt.block_on(server::serve(listen, &uri))),
+        cli::Command::Serve {
+            config,
+            listen,
+            uri,
+            state_dir,
+        } => config::Config::load(
+            config::Overrides {
+                config,
+                listen,
+                uri,
+                state_dir,
+            },
+            std::env::var("STATE_DIRECTORY").ok().as_deref(),
+        )
+        .and_then(|config| {
+            tokio::runtime::Runtime::new()
+                .map_err(|e| format!("cannot start the async runtime: {e}"))
+                .and_then(|rt| rt.block_on(server::serve(config)))
+        }),
     };
     if let Err(e) = result {
         eprintln!("lodger: {e}");
