@@ -35,11 +35,13 @@ jobs:
       - name: Typos
         uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
       # Lodger keeps every `unsafe` in one audited module (the libvirt event glue).
-      # This fails the moment `unsafe` appears anywhere else in the crates.
+      # This fails the moment `unsafe` appears anywhere else in the crates. The
+      # CSP keywords 'unsafe-inline' and 'unsafe-eval' do not count: a quote
+      # before or a hyphen after the word never follows the Rust keyword.
       - name: unsafe only in events/ffi.rs
         run: |
           set -euo pipefail
-          hits=$(grep -rnw 'unsafe' crates --include='*.rs' \
+          hits=$(grep -rnwP "(?<!')unsafe(?!-)" crates --include='*.rs' \
             | grep -v '^crates/lodger-virt/src/events/ffi.rs:' || true)
           if [ -n "$hits" ]; then
             echo "::error::unsafe is allowed only in crates/lodger-virt/src/events/ffi.rs"

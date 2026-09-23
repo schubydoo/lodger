@@ -63,10 +63,10 @@ impl AppState {
 ///
 /// Every API route needs a live session (TAD 7.2), except health, setup,
 /// and login. New routes go into `protected`, so the guard is the default.
-/// The guard also checks `X-CSRF-Token` on unsafe requests. The WebSocket
+/// The guard also checks `X-CSRF-Token` on state-changing requests. The WebSocket
 /// routes get their session check in Task 2.5.
 ///
-/// Around everything: unsafe requests must come from a Lodger page, and
+/// Around everything: state-changing requests must come from a Lodger page, and
 /// every response gets the security headers (`security.rs`).
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()

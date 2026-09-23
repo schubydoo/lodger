@@ -1,4 +1,4 @@
-//! Browser security: the Origin rule for unsafe requests, and the response
+//! Browser security: the Origin rule for state-changing requests, and the response
 //! headers (TAD section 7.4).
 //!
 //! `SameSite=Strict` does not stop a request from a sibling subdomain, which
@@ -51,7 +51,13 @@ pub fn origin_of(url: &str) -> Result<String, String> {
     })
 }
 
-/// Whether an unsafe request comes from a Lodger page.
+/// GET and HEAD change nothing. The Origin rule and the CSRF check both use
+/// this, so they always agree on which requests they guard.
+pub fn is_safe(method: &Method) -> bool {
+    method == Method::GET || method == Method::HEAD
+}
+
+/// Whether a state-changing request comes from a Lodger page.
 pub fn from_lodger(headers: &HeaderMap, public_origin: Option<&str>) -> bool {
     let value = |name| headers.get(name).and_then(|v| v.to_str().ok());
     if value("sec-fetch-site") == Some("same-origin") {
@@ -63,19 +69,24 @@ pub fn from_lodger(headers: &HeaderMap, public_origin: Option<&str>) -> bool {
     }
 }
 
-/// Middleware: 403 for an unsafe request that does not come from Lodger.
+/// The 403 message. A browser that sends no `Sec-Fetch-Site` (Safari before
+/// 16.4, Firefox before 90) passes only with `public_url`, so it says so.
+const FOREIGN: &str = "this request must come from a Lodger page. If it does, your browser \
+                       sends no Sec-Fetch-Site header: set public_url in the configuration file";
+
+/// Middleware: 403 for a state-changing request that does not come from
+/// Lodger.
 pub async fn require_same_origin(
     State(state): State<AppState>,
     req: Request,
     next: Next,
 ) -> Response {
-    let safe = req.method() == Method::GET || req.method() == Method::HEAD;
-    if safe || from_lodger(req.headers(), state.public_origin.as_deref()) {
+    if is_safe(req.method()) || from_lodger(req.headers(), state.public_origin.as_deref()) {
         return next.run(req).await;
     }
     (
         StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": "this request must come from a Lodger page" })),
+        Json(serde_json::json!({ "error": FOREIGN })),
     )
         .into_response()
 }
@@ -250,7 +261,7 @@ mod tests {
         ] {
             assert!(policy.contains(part), "{policy} lacks {part}");
         }
-        assert!(!policy.contains("unsafe-eval"), "{policy}");
+        assert!(!policy.contains("'unsafe-eval'"), "{policy}");
         let plain = csp("<p>no script</p>", Some("http://10.0.0.5"));
         let plain = plain.to_str().unwrap();
         assert!(plain.contains("script-src 'self';"), "{plain}");

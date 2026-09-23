@@ -43,7 +43,9 @@ pub struct Config {
     /// Holds the database. systemd creates it as `StateDirectory=lodger`.
     pub state_dir: PathBuf,
     /// The origin of the URL that browsers use, such as
-    /// `https://lodger.lan`, for the Origin check (TAD section 7.4).
+    /// `https://lodger.lan`, for the Origin check (TAD section 7.4). A browser
+    /// without `Sec-Fetch-Site` (Safari before 16.4, Firefox before 90) can
+    /// log in only when this is set.
     pub public_url: Option<String>,
     /// Proxies whose `X-Forwarded-For` Lodger trusts (TAD section 7.4).
     pub trusted_proxies: Vec<IpNet>,

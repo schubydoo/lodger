@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -106,7 +106,7 @@ fn csrf_matches(headers: &HeaderMap, session: &Session) -> bool {
 }
 
 /// Middleware for the protected routes: 401 without a live session, and 403
-/// for an unsafe request without the session's CSRF token. The handler can
+/// for a state-changing request without the session's CSRF token. The handler can
 /// read the [`Session`] from the request extensions.
 pub async fn require_session(
     State(state): State<AppState>,
@@ -118,8 +118,7 @@ pub async fn require_session(
         Ok(None) => return unauthorized(),
         Err(()) => return lookup_failed(),
     };
-    let safe = req.method() == Method::GET || req.method() == Method::HEAD;
-    if !safe && !csrf_matches(req.headers(), &session) {
+    if !crate::security::is_safe(req.method()) && !csrf_matches(req.headers(), &session) {
         return error(StatusCode::FORBIDDEN, "missing or wrong X-CSRF-Token");
     }
     req.extensions_mut().insert(session);
