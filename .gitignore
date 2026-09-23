@@ -3,3 +3,8 @@ scratch/
 /web/build/
 /web/node_modules/
 /web/.svelte-kit/
+
+# Local agent configuration. CLAUDE.md and AGENTS.md are committed.
+/.claude/
+/CLAUDE.local.md
+/.mcp.json
