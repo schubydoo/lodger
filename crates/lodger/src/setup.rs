@@ -11,19 +11,21 @@
 //! transaction that fails when any account exists, so two parallel claims
 //! create exactly one account. After that, `/api/setup` answers 404.
 
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::Json;
-use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use lodger_core::validate::Name;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+use crate::audit::{self, Entry};
 use crate::server::AppState;
 
 /// How long a setup token works (PRD section 5.3).
@@ -113,6 +115,8 @@ fn error(code: StatusCode, message: impl Into<String>) -> Response {
 /// answers 404 whatever the request carries.
 pub async fn claim(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Result<Json<Claim>, JsonRejection>,
 ) -> Response {
     // 1. Only a page from this server may claim the install: the Origin
@@ -191,6 +195,9 @@ pub async fn claim(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             eprintln!("lodger: setup done: created the first account, {name}");
+            let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
+            let entry = Entry::ok("setup.completed").account(&name).client_ip(ip);
+            audit::log(&state.db, entry).await;
             (StatusCode::CREATED, Json(Created { username: name })).into_response()
         }
         // Another claim won the race.

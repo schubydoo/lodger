@@ -4,6 +4,7 @@ mod accounts;
 mod admin;
 mod api;
 mod assets;
+mod audit;
 mod auth;
 mod cli;
 mod client_ip;

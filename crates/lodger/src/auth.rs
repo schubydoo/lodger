@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+use crate::audit::{self, Entry};
 use crate::db::{NewSession, Session};
 use crate::server::AppState;
 use crate::throttle::Attempt;
@@ -194,6 +195,9 @@ pub(crate) async fn throttled(
     Ok(attempt)
 }
 
+const LOGIN_SUCCEEDED: &str = "login.succeeded";
+const LOGIN_FAILED: &str = "login.failed";
+
 /// `POST /api/session`: log in.
 pub async fn login(
     State(state): State<AppState>,
@@ -223,6 +227,7 @@ pub async fn login(
     };
     let password = login.password;
     let stored = account.as_ref().map(|a| a.password_hash.clone());
+    let known = account.as_ref().map(|a| a.username.clone());
     // argon2 runs for a missing account too, so the time does not tell
     // which usernames exist.
     let verified = crate::passwords::run(move || match stored {
@@ -232,6 +237,13 @@ pub async fn login(
     .await
     .unwrap_or(false);
     let Some(account) = account.filter(|_| verified) else {
+        // An unknown name stays out of the audit log: it may be a password
+        // typed into the wrong field.
+        let entry = match known {
+            Some(name) => Entry::failed(LOGIN_FAILED, "wrong_password").account(name),
+            None => Entry::failed(LOGIN_FAILED, "no_such_account"),
+        };
+        audit::log(&state.db, entry.client_ip(ip)).await;
         // The throttle counted the failure already. One message for both
         // cases: no hint which part was wrong.
         return error(StatusCode::UNAUTHORIZED, "wrong username or password");
@@ -260,6 +272,13 @@ pub async fn login(
         eprintln!("lodger: login: the database failed: {e}");
         return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot start a session");
     }
+    audit::log(
+        &state.db,
+        Entry::ok(LOGIN_SUCCEEDED)
+            .account(&account.username)
+            .client_ip(ip),
+    )
+    .await;
     let mut response = Json(SessionInfo {
         username: account.username,
         csrf_token,

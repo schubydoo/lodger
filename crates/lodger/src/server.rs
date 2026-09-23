@@ -129,6 +129,10 @@ pub async fn serve(config: Config) -> Result<(), String> {
         .map_err(|e| format!("cannot prepare the password check: {e}"))?;
     let setup = open_setup(&db).await?;
     let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
+    tokio::spawn(crate::audit::delete_old_rows(
+        db.clone(),
+        std::time::Duration::from_secs(24 * 60 * 60),
+    ));
     let state = AppState::new(
         Arc::new(host),
         db,
@@ -986,6 +990,97 @@ mod tests {
         );
         assert_eq!(login(&addr, "admin", GOOD_PASSWORD).await.0, 401);
         assert_eq!(login(&addr, "admin", OTHER_PASSWORD).await.0, 200);
+    }
+
+    /// Every audit row as one line: event, account, client IP, target,
+    /// result, and detail, with `-` for NULL.
+    async fn audit_lines(state: &AppState) -> Vec<String> {
+        state
+            .db
+            .call(|c| {
+                c.prepare(
+                    "SELECT event, account_name, client_ip, target_name, result, detail_json
+                     FROM audit_log ORDER BY id",
+                )?
+                .query_map([], |r| {
+                    let cols: Vec<String> = (0..6)
+                        .map(|i| {
+                            r.get::<_, Option<String>>(i)
+                                .map(|v| v.unwrap_or("-".into()))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    Ok(cols.join(" "))
+                })?
+                .collect()
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn logins_setup_and_account_changes_write_audit_rows_without_secrets() {
+        let (addr, token, state) = serve_setup().await;
+        let created = post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        assert_eq!(created.0, 201);
+        const WRONG: &str = "not the right passphrase";
+        // A password typed into the name field.
+        const TYPED_AS_NAME: &str = "my secret passphrase";
+        assert_eq!(login(&addr, "admin", WRONG).await.0, 401);
+        assert_eq!(login(&addr, TYPED_AS_NAME, WRONG).await.0, 401);
+        let tab = log_in_tab(&addr, "Admin", GOOD_PASSWORD).await;
+
+        let new = serde_json::json!({"username": "second", "password": OTHER_PASSWORD});
+        let (_, second) = call(&addr, &tab, "POST", "/api/accounts", Some(new)).await;
+        let again = serde_json::json!({"username": "SECOND", "password": OTHER_PASSWORD});
+        assert_eq!(
+            call(&addr, &tab, "POST", "/api/accounts", Some(again))
+                .await
+                .0,
+            409
+        );
+        let path = "/api/account/password";
+        let wrong = serde_json::json!({"current_password": WRONG, "new_password": OTHER_PASSWORD});
+        assert_eq!(call(&addr, &tab, "POST", path, Some(wrong)).await.0, 403);
+        let right =
+            serde_json::json!({"current_password": GOOD_PASSWORD, "new_password": OTHER_PASSWORD});
+        assert_eq!(call(&addr, &tab, "POST", path, Some(right)).await.0, 200);
+        let second = format!("/api/accounts/{}", second["id"]);
+        assert_eq!(call(&addr, &tab, "DELETE", &second, None).await.0, 204);
+        let (_, list) = call(&addr, &tab, "GET", "/api/accounts", None).await;
+        let admin = format!("/api/accounts/{}", list[0]["id"]);
+        assert_eq!(call(&addr, &tab, "DELETE", &admin, None).await.0, 409);
+
+        let lines = audit_lines(&state).await;
+        let ip = "127.0.0.1";
+        assert_eq!(
+            lines,
+            [
+                format!("setup.completed admin {ip} - ok -"),
+                format!(r#"login.failed admin {ip} - failed {{"reason":"wrong_password"}}"#),
+                format!(r#"login.failed - {ip} - failed {{"reason":"no_such_account"}}"#),
+                format!("login.succeeded admin {ip} - ok -"),
+                format!("account.create admin {ip} second ok -"),
+                format!(r#"account.create admin {ip} SECOND failed {{"reason":"name_taken"}}"#),
+                format!(
+                    r#"account.change_password admin {ip} admin failed {{"reason":"wrong_password"}}"#
+                ),
+                format!("account.change_password admin {ip} admin ok -"),
+                format!("account.delete admin {ip} second ok -"),
+                format!(r#"account.delete admin {ip} admin failed {{"reason":"last_account"}}"#),
+            ]
+        );
+        let all = lines.join("\n");
+        for secret in [
+            GOOD_PASSWORD,
+            OTHER_PASSWORD,
+            WRONG,
+            TYPED_AS_NAME,
+            token.as_str(),
+            tab.cookie.rsplit('=').next().unwrap(),
+            tab.csrf.as_str(),
+        ] {
+            assert!(!all.contains(secret), "{secret:?} is in the audit log");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

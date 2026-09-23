@@ -359,6 +359,50 @@ fn post_setup(addr: &str, token: &str, username: &str) -> String {
 }
 
 #[test]
+fn a_start_deletes_audit_rows_older_than_365_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let (child, _, _) = serve_on(&state);
+    Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    }
+    .stop();
+
+    let db = rusqlite::Connection::open(state.join("lodger.db")).unwrap();
+    for (age, event) in [("-400 days", "old"), ("-10 days", "recent")] {
+        db.execute(
+            "INSERT INTO audit_log (ts, event, result)
+             VALUES (strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1), ?2, 'ok')",
+            [age, event],
+        )
+        .unwrap();
+    }
+    let events = || -> Vec<String> {
+        db.prepare("SELECT event FROM audit_log ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(events(), ["old", "recent"]);
+
+    // The daily task runs once at the start.
+    let (child, _, _) = serve_on(&state);
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while events().len() > 1 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(events(), ["recent"]);
+    server.stop();
+}
+
+#[test]
 fn a_restart_before_the_first_account_writes_a_new_token() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
@@ -428,7 +472,7 @@ fn login(addr: &str, username: &str, password: &str) -> Option<String> {
 }
 
 #[test]
-fn the_sixth_failed_login_waits_and_logs_a_warning() {
+fn the_sixth_failed_login_waits_and_every_failure_is_logged() {
     let dir = tempfile::tempdir().unwrap();
     let (child, addr, token, log) = serve_logged(&dir.path().join("state"));
     let mut server = Server {
@@ -458,5 +502,13 @@ fn the_sixth_failed_login_waits_and_logs_a_warning() {
         .iter()
         .any(|l| l.contains(r#"WARNING: 5 failed logins in 15 minutes for account "admin""#));
     assert!(warned, "{:?}", log.lock().unwrap());
+    // Each failure has its journald copy on stderr, where systemd collects it.
+    let copy = r#"lodger: audit: {"event":"login.failed","account":"admin","client_ip":"127.0.0.1","result":"failed","detail":{"reason":"wrong_password"}}"#;
+    let copies = || log.lock().unwrap().iter().filter(|l| *l == copy).count();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while copies() < 6 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(copies(), 6, "{:?}", log.lock().unwrap());
     server.stop();
 }
