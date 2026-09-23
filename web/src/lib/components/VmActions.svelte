@@ -40,6 +40,14 @@
 		if (shutdownAskedIn !== null && vm.state !== shutdownAskedIn) shutdownAskedIn = null;
 	});
 
+	// A VM that stops for another reason closes the Force off field.
+	$effect(() => {
+		if (forcing && !canForceOff) {
+			forcing = false;
+			typed = '';
+		}
+	});
+
 	async function run(action: VmAction) {
 		// The buttons are disabled meanwhile. This return also stops a
 		// second click that arrives before the page updates.
@@ -47,12 +55,15 @@
 		if (action === 'force-off' && typed !== vm.name) return;
 		problem = '';
 		busy = action;
+		// The state before the request: the event can refresh the list
+		// before the answer arrives.
+		const before = vm.state;
 		try {
 			await vmAction(vm.uuid, action, {
 				confirm: action === 'force-off' ? typed : undefined,
 				csrf: client.getQueryData<Session | null>(keys.session)?.csrf_token
 			});
-			if (action === 'shutdown') shutdownAskedIn = vm.state;
+			if (action === 'shutdown') shutdownAskedIn = before;
 			if (action === 'force-off') {
 				forcing = false;
 				typed = '';

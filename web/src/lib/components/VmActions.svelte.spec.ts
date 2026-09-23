@@ -62,6 +62,30 @@ describe('the power buttons', () => {
 		await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
 	});
 
+	it('drops the shutdown note when the VM stopped before the answer came', async () => {
+		let answer: (res: Response) => void = () => {};
+		const { view } = show(running);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)))
+		);
+		await fireEvent.click(button('Shut down alpha'));
+		// The event refreshes the list first, then the 204 arrives.
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		answer(new Response(null, { status: 204 }));
+		expect(await screen.findByRole('button', { name: 'Start alpha' })).toBeEnabled();
+		expect(screen.queryByRole('status')).toBeNull();
+	});
+
+	it('closes the Force off field when the VM stops for another reason', async () => {
+		const { view } = show(running);
+		await fireEvent.click(button('Force off alpha'));
+		await typeName('alpha');
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		expect(await screen.findByRole('button', { name: 'Start alpha' })).toBeInTheDocument();
+		expect(screen.queryByLabelText('Type alpha to force it off')).toBeNull();
+	});
+
 	it('forces off only after the exact name is typed, and sends it', async () => {
 		const { fetcher } = show(running);
 		await fireEvent.click(button('Force off alpha'));
