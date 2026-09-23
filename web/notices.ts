@@ -18,8 +18,16 @@ import satisfies from 'spdx-satisfies';
 import validExpression from 'spdx-expression-validate';
 import type { Plugin } from 'vite';
 
-const ALLOWED =
-	'(MIT OR ISC OR Apache-2.0 OR BSD-2-Clause OR BSD-3-Clause OR 0BSD OR MPL-2.0 OR CC0-1.0)';
+const ALLOWED = [
+	'MIT',
+	'ISC',
+	'Apache-2.0',
+	'BSD-2-Clause',
+	'BSD-3-Clause',
+	'0BSD',
+	'MPL-2.0',
+	'CC0-1.0'
+];
 
 /**
  * Packages whose package.json names no license, with the license that their

@@ -3,8 +3,8 @@
 // includes.
 
 declare module 'spdx-satisfies' {
-	/** Whether the license expression `first` satisfies the expression `second`. */
-	export default function satisfies(first: string, second: string): boolean;
+	/** Whether the license expression `expression` allows one of the `approved` licenses. */
+	export default function satisfies(expression: string, approved: string[]): boolean;
 }
 
 declare module 'spdx-expression-validate' {
