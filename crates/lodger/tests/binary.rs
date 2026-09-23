@@ -66,6 +66,44 @@ fn serve_fails_cleanly_when_the_state_directory_is_unusable() {
     );
 }
 
+#[test]
+fn admin_refuses_to_run_without_root() {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    assert!(
+        !status
+            .lines()
+            .any(|l| l.starts_with("Uid:") && l.split_whitespace().nth(2) == Some("0")),
+        "run this test as a user other than root"
+    );
+    let state = tempfile::tempdir().unwrap();
+    for action in ["reset-password", "create"] {
+        let mut child = lodger()
+            .args(["admin", action, "alice", "--state-dir"])
+            .arg(state.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("lodger runs");
+        // lodger can exit before it reads stdin, so a failed write is fine.
+        let _ = child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"a long enough password 42\n");
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{action}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr.contains("lodger admin must run as root"),
+            "{action}: {stderr}"
+        );
+        assert!(out.stdout.is_empty(), "{action}");
+    }
+    // The check comes first: nothing was created in the state directory.
+    assert_eq!(std::fs::read_dir(state.path()).unwrap().count(), 0);
+}
+
 /// Stops the server when the test ends, even on a failed assertion. `stop` sends
 /// SIGTERM, like systemd does, and the server shuts down gracefully. SIGKILL is
 /// only the fallback: a killed process writes no coverage data. The server's

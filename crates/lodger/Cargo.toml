@@ -17,6 +17,7 @@ hex = "0.4.3"
 ipnet = { version = "2.12.2", features = ["serde"] }
 lodger-core.workspace = true
 lodger-virt.workspace = true
+rpassword = "7.5.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rusqlite_migration = "2.6.0"
 base64 = "0.23.0"

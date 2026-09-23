@@ -53,6 +53,17 @@ pub enum Deleted {
     LastAccount,
 }
 
+/// One row of the audit log. `detail_json` holds only allowlisted fields:
+/// never a password, a token, or cloud-init user-data (TAD 5.1).
+#[derive(Debug, Clone)]
+pub struct AuditRow {
+    pub event: &'static str,
+    pub target_kind: &'static str,
+    pub target_name: String,
+    pub result: &'static str,
+    pub detail_json: String,
+}
+
 /// The data of a new session.
 #[derive(Debug, Clone)]
 pub struct NewSession {
@@ -306,6 +317,67 @@ impl Db {
             })
             .await
             .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// Stores a new password hash for the account with this username and
+    /// ends all of its sessions, in one transaction. Returns how many
+    /// sessions ended, or `None` when no account has the name.
+    pub async fn reset_password(
+        &self,
+        username: String,
+        password_hash: String,
+    ) -> Result<Option<usize>, String> {
+        self.conn
+            .call(move |c| {
+                // IMMEDIATE takes the write lock before the read, so a write by
+                // the running service cannot fail the upgrade with SQLITE_BUSY.
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let id: Option<i64> = tx
+                    .query_row(
+                        "SELECT id FROM accounts WHERE username = ?1",
+                        [&username],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(id) = id else {
+                    return Ok(None);
+                };
+                tx.execute(
+                    &format!(
+                        "UPDATE accounts SET password_hash = ?1, password_changed_at = {NOW}
+                         WHERE id = ?2"
+                    ),
+                    rusqlite::params![password_hash, id],
+                )?;
+                let ended = tx.execute("DELETE FROM sessions WHERE account_id = ?1", [id])?;
+                tx.commit()?;
+                Ok(Some(ended))
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// Adds a row to the audit log, with the current time.
+    pub async fn audit(&self, row: AuditRow) -> Result<(), String> {
+        self.conn
+            .call(move |c| {
+                c.execute(
+                    &format!(
+                        "INSERT INTO audit_log (ts, event, target_kind, target_name, result, detail_json)
+                         VALUES ({NOW}, ?1, ?2, ?3, ?4, ?5)"
+                    ),
+                    rusqlite::params![
+                        row.event,
+                        row.target_kind,
+                        row.target_name,
+                        row.result,
+                        row.detail_json
+                    ],
+                )
+                .map(drop)
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// The account with this username, compared without regard to case.

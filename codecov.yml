@@ -123,6 +123,7 @@ component_management:
       name: lodger (server, web assets, CLI)
       paths:
         - crates/lodger/src/accounts.rs
+        - crates/lodger/src/admin.rs
         - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
         - crates/lodger/src/auth.rs
