@@ -181,18 +181,37 @@ pub(crate) async fn throttled(
         }
     };
     if !attempt.wait.is_zero() {
-        // {:?} escapes control characters, so a crafted name cannot forge
-        // log lines. The name is cut, so it cannot flood the log either.
-        let shown: String = username.chars().take(64).collect();
+        // Like the audit log, the warning names only an account that
+        // exists: an unknown name may be a password typed into the wrong
+        // field.
+        let known = matches!(
+            state.db.find_account(username.to_owned()).await,
+            Ok(Some(_))
+        );
         eprintln!(
-            "lodger: WARNING: {} failed logins in 15 minutes for account {shown:?} \
-             or from {ip}; this attempt waits {} s",
-            attempt.failures,
-            attempt.wait.as_secs()
+            "{}",
+            throttle_warning(&attempt, known.then_some(username), ip)
         );
         tokio::time::sleep(attempt.wait).await;
     }
     Ok(attempt)
+}
+
+/// The log line for an attempt that waits. `account` is `None` for a name
+/// that no account has.
+fn throttle_warning(attempt: &Attempt, account: Option<&str>, ip: IpAddr) -> String {
+    let account = match account {
+        // {:?} escapes control characters, so a crafted name cannot forge
+        // log lines. The name is cut, so it cannot flood the log either.
+        Some(name) => format!("account {:?}", name.chars().take(64).collect::<String>()),
+        None => "an unknown account".to_owned(),
+    };
+    format!(
+        "lodger: WARNING: {} failed logins in 15 minutes for {account} or from {ip}; \
+         this attempt waits {} s",
+        attempt.failures,
+        attempt.wait.as_secs()
+    )
 }
 
 const LOGIN_SUCCEEDED: &str = "login.succeeded";
@@ -398,6 +417,24 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, header};
 
     use super::{COOKIE, clear_cookie, cookie_token, random_token, set_cookie};
+
+    #[test]
+    fn the_throttle_warning_names_only_a_known_account() {
+        let attempt = super::Attempt {
+            wait: std::time::Duration::from_secs(2),
+            failures: 6,
+            at: std::time::Instant::now(),
+        };
+        let ip: std::net::IpAddr = "192.0.2.7".parse().unwrap();
+        assert_eq!(
+            super::throttle_warning(&attempt, Some("admin\n"), ip),
+            r#"lodger: WARNING: 6 failed logins in 15 minutes for account "admin\n" or from 192.0.2.7; this attempt waits 2 s"#
+        );
+        assert_eq!(
+            super::throttle_warning(&attempt, None, ip),
+            "lodger: WARNING: 6 failed logins in 15 minutes for an unknown account or from 192.0.2.7; this attempt waits 2 s"
+        );
+    }
 
     #[test]
     fn a_token_is_256_random_bits_in_hex() {

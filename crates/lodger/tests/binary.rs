@@ -489,26 +489,39 @@ fn the_sixth_failed_login_waits_and_every_failure_is_logged() {
             .iter()
             .any(|l| l.contains("WARNING: 5 failed logins"))
     );
+    // The sixth attempt from this IP types the password into the name field.
+    let typed_as_name = "my secret passphrase";
     let start = std::time::Instant::now();
-    assert_eq!(login(&addr, "admin", "wrong wrong wrong wrong"), None);
+    assert_eq!(login(&addr, typed_as_name, "wrong wrong wrong wrong"), None);
     assert!(
         start.elapsed() >= std::time::Duration::from_secs(1),
         "{:?}",
         start.elapsed()
     );
-    let warned = log
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|l| l.contains(r#"WARNING: 5 failed logins in 15 minutes for account "admin""#));
+    let warned = log.lock().unwrap().iter().any(|l| {
+        l.contains(
+            "WARNING: 5 failed logins in 15 minutes for an unknown account or from 127.0.0.1",
+        )
+    });
     assert!(warned, "{:?}", log.lock().unwrap());
     // Each failure has its journald copy on stderr, where systemd collects it.
     let copy = r#"lodger: audit: {"event":"login.failed","account":"admin","client_ip":"127.0.0.1","result":"failed","detail":{"reason":"wrong_password"}}"#;
-    let copies = || log.lock().unwrap().iter().filter(|l| *l == copy).count();
+    let unknown = r#"lodger: audit: {"event":"login.failed","client_ip":"127.0.0.1","result":"failed","detail":{"reason":"no_such_account"}}"#;
+    let count = |line: &str| log.lock().unwrap().iter().filter(|l| *l == line).count();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while copies() < 6 && std::time::Instant::now() < deadline {
+    while count(unknown) < 1 && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(copies(), 6, "{:?}", log.lock().unwrap());
+    assert_eq!(count(copy), 5, "{:?}", log.lock().unwrap());
+    assert_eq!(count(unknown), 1, "{:?}", log.lock().unwrap());
+    // Neither the warning nor the audit copy shows the typed name.
+    assert!(
+        !log.lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains(typed_as_name)),
+        "{:?}",
+        log.lock().unwrap()
+    );
     server.stop();
 }
