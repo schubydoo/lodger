@@ -45,23 +45,27 @@ pub struct AccountInfo {
 }
 
 /// What [`Db::delete_account`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Deleted {
-    Yes,
+    /// Deleted the account with this username.
+    Yes(String),
     NoSuchAccount,
     /// Refused: it is the last account, and Lodger would be locked.
     LastAccount,
 }
 
-/// One row of the audit log. `detail_json` holds only allowlisted fields:
-/// never a password, a token, or cloud-init user-data (TAD 5.1).
+/// One row of the audit log. `audit.rs` builds it: `detail_json` holds only
+/// allowlisted fields, never a password, a token, or cloud-init user-data
+/// (TAD 5.1).
 #[derive(Debug, Clone)]
 pub struct AuditRow {
     pub event: &'static str,
-    pub target_kind: &'static str,
-    pub target_name: String,
+    pub account_name: Option<String>,
+    pub client_ip: Option<String>,
+    pub target_kind: Option<&'static str>,
+    pub target_name: Option<String>,
     pub result: &'static str,
-    pub detail_json: String,
+    pub detail_json: Option<String>,
 }
 
 /// The data of a new session.
@@ -248,18 +252,18 @@ impl Db {
             .call(move |c| {
                 let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let count: i64 = tx.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = ?1)",
-                    [id],
-                    |r| r.get(0),
-                )?;
-                let outcome = if !exists {
-                    Deleted::NoSuchAccount
-                } else if count <= 1 {
-                    Deleted::LastAccount
-                } else {
-                    tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
-                    Deleted::Yes
+                let name: Option<String> = tx
+                    .query_row("SELECT username FROM accounts WHERE id = ?1", [id], |r| {
+                        r.get(0)
+                    })
+                    .optional()?;
+                let outcome = match name {
+                    None => Deleted::NoSuchAccount,
+                    Some(_) if count <= 1 => Deleted::LastAccount,
+                    Some(name) => {
+                        tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
+                        Deleted::Yes(name)
+                    }
                 };
                 tx.commit()?;
                 Ok(outcome)
@@ -363,11 +367,14 @@ impl Db {
             .call(move |c| {
                 c.execute(
                     &format!(
-                        "INSERT INTO audit_log (ts, event, target_kind, target_name, result, detail_json)
-                         VALUES ({NOW}, ?1, ?2, ?3, ?4, ?5)"
+                        "INSERT INTO audit_log
+                           (ts, event, account_name, client_ip, target_kind, target_name, result, detail_json)
+                         VALUES ({NOW}, ?1, ?2, ?3, ?4, ?5, ?6, ?7)"
                     ),
                     rusqlite::params![
                         row.event,
+                        row.account_name,
+                        row.client_ip,
                         row.target_kind,
                         row.target_name,
                         row.result,
@@ -375,6 +382,21 @@ impl Db {
                     ],
                 )
                 .map(drop)
+            })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Deletes the audit rows older than `days` days and returns how many
+    /// went (TAD 5.2).
+    pub async fn delete_old_audit_rows(&self, days: u32) -> Result<usize, String> {
+        self.conn
+            .call(move |c| {
+                c.execute(
+                    "DELETE FROM audit_log
+                     WHERE ts < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)",
+                    [format!("-{days} days")],
+                )
             })
             .await
             .map_err(|e| e.to_string())

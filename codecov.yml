@@ -126,6 +126,7 @@ component_management:
         - crates/lodger/src/admin.rs
         - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
+        - crates/lodger/src/audit.rs
         - crates/lodger/src/auth.rs
         - crates/lodger/src/cli.rs
         - crates/lodger/src/client_ip.rs

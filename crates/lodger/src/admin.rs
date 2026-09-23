@@ -12,13 +12,14 @@
 //! the same policy as in the web UI.
 
 use std::io::IsTerminal;
+use std::path::Path;
 
 use lodger_core::validate::Name;
-use serde_json::json;
 
+use crate::audit::{self, Entry, Journal};
 use crate::cli::AdminAction;
 use crate::config::{Config, Overrides};
-use crate::db::{self, AuditRow, Db};
+use crate::db::{self, Db};
 
 /// The effective user ID from the text of `/proc/<pid>/status`: the second
 /// field of the `Uid:` line.
@@ -49,7 +50,10 @@ pub fn run(action: AdminAction, overrides: Overrides) -> Result<String, String> 
             path.display()
         ));
     }
-    let detail = cli_detail(std::env::var("SUDO_USER").ok());
+    let ctx = Context {
+        journal: Journal::Socket(Path::new(audit::JOURNAL_SOCKET)),
+        sudo_user: std::env::var("SUDO_USER").ok(),
+    };
     tokio::runtime::Builder::new_current_thread()
         .build()
         .map_err(|e| format!("cannot start the async runtime: {e}"))?
@@ -57,18 +61,29 @@ pub fn run(action: AdminAction, overrides: Overrides) -> Result<String, String> 
             let db = Db::open(&config.state_dir).await?;
             match action {
                 AdminAction::ResetPassword { username } => {
-                    reset_password(&db, &username, read_password, detail).await
+                    reset_password(&db, &username, read_password, &ctx).await
                 }
                 AdminAction::Create { username } => {
-                    create(&db, &username, read_password, detail).await
+                    create(&db, &username, read_password, &ctx).await
                 }
             }
         })
 }
 
-/// The audit detail of a command line change: who ran it through sudo.
-fn cli_detail(sudo_user: Option<String>) -> serde_json::Value {
-    json!({ "via": "cli", "sudo_user": sudo_user })
+/// Where an admin command sends the audit copy, and who ran it.
+struct Context<'a> {
+    journal: Journal<'a>,
+    /// The user who ran `sudo`.
+    sudo_user: Option<String>,
+}
+
+impl Context<'_> {
+    /// Writes the audit row of an admin command, marked as a CLI change.
+    async fn audit(&self, db: &Db, mut entry: Entry) -> Result<(), String> {
+        entry.detail.via = Some("cli");
+        entry.detail.sudo_user.clone_from(&self.sudo_user);
+        audit::record(db, self.journal, entry).await
+    }
 }
 
 /// Reads the new password: twice from the terminal without echo, or one line
@@ -105,25 +120,6 @@ fn new_hash(
     crate::passwords::hash(&password).map_err(|e| format!("cannot hash the password: {e}"))
 }
 
-/// Writes the audit row of an admin command.
-async fn audit(
-    db: &Db,
-    event: &'static str,
-    username: &str,
-    result: &'static str,
-    detail: serde_json::Value,
-) -> Result<(), String> {
-    db.audit(AuditRow {
-        event,
-        target_kind: "account",
-        target_name: username.to_owned(),
-        result,
-        detail_json: detail.to_string(),
-    })
-    .await
-    .map_err(|e| format!("cannot write the audit row: {e}"))
-}
-
 const RESET: &str = "account.reset_password";
 const CREATE: &str = "account.create";
 
@@ -132,17 +128,14 @@ async fn reset_password(
     db: &Db,
     username: &str,
     read: impl FnOnce(&str) -> Result<String, String>,
-    detail: serde_json::Value,
+    ctx: &Context<'_>,
 ) -> Result<String, String> {
     let username = parse_name(username)?;
     let username = username.as_str();
     let Some(account) = db.find_account(username.to_owned()).await? else {
-        audit(
+        ctx.audit(
             db,
-            RESET,
-            username,
-            "failed",
-            with_reason(detail, "no_such_account"),
+            Entry::failed(RESET, "no_such_account").target_account(username),
         )
         .await?;
         return Err(format!("there is no account called {username}"));
@@ -150,19 +143,17 @@ async fn reset_password(
     let hash = new_hash(&account.username, read)?;
     match db.reset_password(account.username.clone(), hash).await? {
         Some(ended) => {
-            audit(db, RESET, &account.username, "ok", detail).await?;
+            ctx.audit(db, Entry::ok(RESET).target_account(&account.username))
+                .await?;
             Ok(format!(
                 "Set a new password for {} and ended {ended} session(s).",
                 account.username
             ))
         }
         None => {
-            audit(
+            ctx.audit(
                 db,
-                RESET,
-                username,
-                "failed",
-                with_reason(detail, "no_such_account"),
+                Entry::failed(RESET, "no_such_account").target_account(username),
             )
             .await?;
             Err(format!("there is no account called {username}"))
@@ -175,16 +166,13 @@ async fn create(
     db: &Db,
     username: &str,
     read: impl FnOnce(&str) -> Result<String, String>,
-    detail: serde_json::Value,
+    ctx: &Context<'_>,
 ) -> Result<String, String> {
     let username = parse_name(username)?.as_str().to_owned();
     if db.find_account(username.clone()).await?.is_some() {
-        audit(
+        ctx.audit(
             db,
-            CREATE,
-            &username,
-            "failed",
-            with_reason(detail, "name_taken"),
+            Entry::failed(CREATE, "name_taken").target_account(&username),
         )
         .await?;
         return Err(format!("an account called {username} exists already"));
@@ -192,16 +180,14 @@ async fn create(
     let hash = new_hash(&username, read)?;
     match db.create_account(username.clone(), hash).await? {
         Some(_) => {
-            audit(db, CREATE, &username, "ok", detail).await?;
+            ctx.audit(db, Entry::ok(CREATE).target_account(&username))
+                .await?;
             Ok(format!("Created the account {username}."))
         }
         None => {
-            audit(
+            ctx.audit(
                 db,
-                CREATE,
-                &username,
-                "failed",
-                with_reason(detail, "name_taken"),
+                Entry::failed(CREATE, "name_taken").target_account(&username),
             )
             .await?;
             Err(format!("an account called {username} exists already"))
@@ -213,11 +199,6 @@ async fn create(
 /// never reaches the audit log.
 fn parse_name(username: &str) -> Result<Name, String> {
     Name::parse("username", username).map_err(|e| e.to_string())
-}
-
-fn with_reason(mut detail: serde_json::Value, reason: &str) -> serde_json::Value {
-    detail["reason"] = json!(reason);
-    detail
 }
 
 #[cfg(test)]
@@ -232,8 +213,11 @@ mod tests {
         move |_| Ok(password.to_owned())
     }
 
-    fn detail() -> serde_json::Value {
-        cli_detail(Some("schuby".to_owned()))
+    fn ctx() -> Context<'static> {
+        Context {
+            journal: Journal::Stderr,
+            sudo_user: Some("schuby".to_owned()),
+        }
     }
 
     /// Every audit row as (`event`, `target_name`, `result`, `detail_json`).
@@ -301,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn reset_sets_the_password_ends_every_session_and_audits() {
         let db = with_alice().await;
-        let line = reset_password(&db, "ALICE", given(BETTER), detail())
+        let line = reset_password(&db, "ALICE", given(BETTER), &ctx())
             .await
             .unwrap();
         assert_eq!(line, "Set a new password for alice and ended 2 session(s).");
@@ -316,14 +300,14 @@ mod tests {
             (event.as_str(), target.as_str(), result.as_str()),
             (RESET, "alice", "ok")
         );
-        assert_eq!(detail_json, r#"{"sudo_user":"schuby","via":"cli"}"#);
+        assert_eq!(detail_json, r#"{"via":"cli","sudo_user":"schuby"}"#);
         assert!(!detail_json.contains(BETTER));
     }
 
     #[tokio::test]
     async fn reset_of_a_missing_account_asks_nothing_and_audits_the_failure() {
         let db = with_alice().await;
-        let e = reset_password(&db, "bob", |_| panic!("no prompt"), detail())
+        let e = reset_password(&db, "bob", |_| panic!("no prompt"), &ctx())
             .await
             .unwrap_err();
         assert_eq!(e, "there is no account called bob");
@@ -341,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn a_weak_password_changes_nothing() {
         let db = with_alice().await;
-        let e = reset_password(&db, "alice", given("password"), detail())
+        let e = reset_password(&db, "alice", given("password"), &ctx())
             .await
             .unwrap_err();
         assert!(e.contains("15"), "{e}");
@@ -361,7 +345,7 @@ mod tests {
                 assert_eq!(name, "alice");
                 Ok(BETTER.to_owned())
             },
-            detail(),
+            &ctx(),
         )
         .await
         .unwrap();
@@ -370,7 +354,7 @@ mod tests {
     #[tokio::test]
     async fn create_adds_an_account_that_can_log_in_and_audits() {
         let db = with_alice().await;
-        let line = create(&db, "bob", given(BETTER), detail()).await.unwrap();
+        let line = create(&db, "bob", given(BETTER), &ctx()).await.unwrap();
         assert_eq!(line, "Created the account bob.");
         let bob = db.find_account("bob".into()).await.unwrap().unwrap();
         assert!(crate::passwords::verify(BETTER, &bob.password_hash));
@@ -385,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn create_refuses_a_taken_name_and_audits_the_failure() {
         let db = with_alice().await;
-        let e = create(&db, "Alice", |_| panic!("no prompt"), detail())
+        let e = create(&db, "Alice", |_| panic!("no prompt"), &ctx())
             .await
             .unwrap_err();
         assert_eq!(e, "an account called Alice exists already");
@@ -403,20 +387,12 @@ mod tests {
     async fn an_invalid_name_or_weak_password_creates_nothing() {
         let db = Db::in_memory().await;
         assert!(
-            create(&db, "", |_| panic!("no prompt"), detail())
+            create(&db, "", |_| panic!("no prompt"), &ctx())
                 .await
                 .is_err()
         );
-        assert!(create(&db, "bob", given("short"), detail()).await.is_err());
+        assert!(create(&db, "bob", given("short"), &ctx()).await.is_err());
         assert_eq!(db.account_count().await.unwrap(), 0);
         assert!(audit_rows(&db).await.is_empty());
-    }
-
-    #[test]
-    fn the_detail_names_the_sudo_user_or_null() {
-        assert_eq!(
-            cli_detail(None).to_string(),
-            r#"{"sudo_user":null,"via":"cli"}"#
-        );
     }
 }

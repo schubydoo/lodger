@@ -22,8 +22,13 @@ use axum::{Extension, Json};
 use lodger_core::validate::Name;
 use serde::{Deserialize, Serialize};
 
+use crate::audit::{self, Entry};
 use crate::db::{AccountInfo, Deleted, Session};
 use crate::server::AppState;
+
+const CREATE: &str = "account.create";
+const DELETE: &str = "account.delete";
+const CHANGE_PASSWORD: &str = "account.change_password";
 
 fn error(code: StatusCode, message: impl Into<String>) -> Response {
     (code, Json(serde_json::json!({ "error": message.into() }))).into_response()
@@ -107,6 +112,9 @@ pub struct Created {
 /// `POST /api/accounts`.
 pub async fn create(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Extension(session): Extension<Session>,
     body: Result<Json<NewAccount>, JsonRejection>,
 ) -> Response {
     let new = match body {
@@ -124,31 +132,62 @@ pub async fn create(
         Ok(hash) => hash,
         Err(response) => return *response,
     };
+    let by = |entry: Entry| {
+        let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
+        entry
+            .account(&session.username)
+            .client_ip(ip)
+            .target_account(&username)
+    };
     match state.db.create_account(username.clone(), hash).await {
         Ok(Some(id)) => {
             eprintln!("lodger: accounts: created the account {username}");
+            audit::log(&state.db, by(Entry::ok(CREATE))).await;
             (StatusCode::CREATED, Json(Created { id, username })).into_response()
         }
-        Ok(None) => error(
-            StatusCode::CONFLICT,
-            format!("an account called {username} exists already"),
-        ),
+        Ok(None) => {
+            audit::log(&state.db, by(Entry::failed(CREATE, "name_taken"))).await;
+            error(
+                StatusCode::CONFLICT,
+                format!("an account called {username} exists already"),
+            )
+        }
         Err(e) => database_failed("create the account", &e),
     }
 }
 
 /// `DELETE /api/accounts/{id}`.
-pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+pub async fn delete(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Extension(session): Extension<Session>,
+    Path(id): Path<i64>,
+) -> Response {
+    let by = |entry: Entry| {
+        let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
+        entry.account(&session.username).client_ip(ip)
+    };
     match state.db.delete_account(id).await {
-        Ok(Deleted::Yes) => {
+        Ok(Deleted::Yes(name)) => {
             eprintln!("lodger: accounts: deleted the account with id {id}");
+            audit::log(&state.db, by(Entry::ok(DELETE)).target_account(name)).await;
             StatusCode::NO_CONTENT.into_response()
         }
+        // No name to record: the account never existed.
         Ok(Deleted::NoSuchAccount) => error(StatusCode::NOT_FOUND, "no such account"),
-        Ok(Deleted::LastAccount) => error(
-            StatusCode::CONFLICT,
-            "this is the last account. Add another account before you delete this one",
-        ),
+        // The last account is the caller's own, since the caller has a session.
+        Ok(Deleted::LastAccount) => {
+            audit::log(
+                &state.db,
+                by(Entry::failed(DELETE, "last_account")).target_account(&session.username),
+            )
+            .await;
+            error(
+                StatusCode::CONFLICT,
+                "this is the last account. Add another account before you delete this one",
+            )
+        }
         Err(e) => database_failed("delete the account", &e),
     }
 }
@@ -206,7 +245,18 @@ pub async fn change_password(
     let verified = crate::passwords::run(move || crate::passwords::verify(&current, &stored))
         .await
         .unwrap_or(false);
+    let by = |entry: Entry| {
+        entry
+            .account(&account.username)
+            .client_ip(ip)
+            .target_account(&account.username)
+    };
     if !verified {
+        audit::log(
+            &state.db,
+            by(Entry::failed(CHANGE_PASSWORD, "wrong_password")),
+        )
+        .await;
         // 403, not 401: the session is fine, and the page must not log out.
         return error(StatusCode::FORBIDDEN, "the current password is wrong");
     }
@@ -219,6 +269,7 @@ pub async fn change_password(
     let keep = crate::auth::session_key(&headers).expect("require_session found the cookie");
     match state.db.change_password(account.id, hash, keep).await {
         Ok(ended_sessions) => {
+            audit::log(&state.db, by(Entry::ok(CHANGE_PASSWORD))).await;
             eprintln!(
                 "lodger: accounts: {} changed the password; {ended_sessions} other sessions ended",
                 account.username
