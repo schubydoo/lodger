@@ -15,7 +15,7 @@ uuid = "1.26.1"
 virt.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
