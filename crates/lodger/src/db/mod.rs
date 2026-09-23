@@ -252,7 +252,6 @@ impl Db {
             .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
-    /// Ends the session with this token hash, if it exists.
     /// Whether the session is still live. Unlike [`Db::session`], it does
     /// not count as use, so an open WebSocket does not keep a session alive.
     pub async fn session_alive(&self, token_sha256: [u8; 32]) -> Result<bool, String> {
@@ -271,6 +270,7 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
+    /// Ends the session with this token hash, if it exists.
     pub async fn delete_session(&self, token_sha256: [u8; 32]) -> Result<(), String> {
         self.conn
             .call(move |c| {
