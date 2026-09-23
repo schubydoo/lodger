@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { svelteTesting } from '@testing-library/svelte/vite';
 import { codecovSvelteKitPlugin } from '@codecov/sveltekit-plugin';
+import { notices } from './notices';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 
@@ -18,6 +19,8 @@ export default defineConfig({
 			// embeds and serves as the fallback (see crates/lodger/src/assets.rs later).
 			adapter: adapter({ fallback: '200.html' })
 		}),
+		// License check and /third-party-notices.txt (notices.ts).
+		...notices(import.meta.dirname),
 		// SvelteKit names its output `__sveltekit_<build hash>.app`. ES modules
 		// ignore that name, but the Codecov plugin appends it to the bundle
 		// name, so each build would start a new bundle in Bundle Analysis.
