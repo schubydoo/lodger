@@ -4,11 +4,13 @@ mod cache;
 mod conn;
 mod console;
 mod events;
+mod power;
 mod supervisor;
 
 pub use cache::Inventory;
 pub use conn::{Error, Virt};
 pub use events::{DomainChange, Event};
+pub use power::Power;
 pub use supervisor::{ConnState, Host};
 
 /// Returns the version of the libvirt client library that Lodger links to,
