@@ -50,7 +50,7 @@
 		"rollup-plugin-license": "3.7.1",
 		"shadcn-svelte": "1.7.0",
 		"spdx-expression-validate": "2.0.0",
-		"spdx-satisfies": "5.0.1",
+		"spdx-satisfies": "6.0.0",
 		"svelte": "5.57.1",
 		"svelte-check": "4.7.6",
 		"tailwind-variants": "3.3.1",
