@@ -108,6 +108,7 @@ component_management:
         - crates/lodger-core/src/model/snapshot.rs
         - crates/lodger-core/src/model/vm.rs
         - crates/lodger-core/src/model/volume.rs
+        - crates/lodger-core/src/password/mod.rs
         - crates/lodger-core/src/validate.rs
     - component_id: lodger-virt
       name: lodger-virt (libvirt adapter)
@@ -129,6 +130,7 @@ component_management:
         - crates/lodger/src/db/mod.rs
         - crates/lodger/src/db/tests.rs
         - crates/lodger/src/server.rs
+        - crates/lodger/src/setup.rs
         - crates/lodger/src/ws.rs
     # The web UI selects its files by flag, not by path, so no path list needs
     # an update when a Svelte file appears.

@@ -52,7 +52,11 @@ tests pass — flag it Important:
    needs a valid session. Every state-changing request checks CSRF and Origin, and every
    WebSocket upgrade checks Origin and the session.
 8. **No secrets in logs.** Passwords, tokens, setup tokens, TOTP secrets, and cloud-init
-   user-data never reach a log line or the audit log.
+   user-data never reach a log line or the audit log. One exception, by design (TAD 7.1,
+   PRD F2): at a start with no accounts, `lodger serve` writes the first-run setup token to
+   stderr, so the host operator can read it from the journal. That token works once, for
+   60 minutes, and only until the next restart. Any other line that prints a setup token,
+   or this one printing anything else secret, is a finding.
 9. **Input is checked before `virt`.** `lodger-core` rejects NUL bytes and invalid names
    before any value reaches `virt`, because `virt` still panics on a NUL byte in places.
 10. **Docs honesty.** Behaviour changes update the docs in the same PR. **Never claim a
