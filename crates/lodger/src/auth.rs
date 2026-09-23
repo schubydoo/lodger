@@ -15,7 +15,7 @@
 //! also needs the session's token in `X-CSRF-Token`, or it answers 403. A
 //! session ends after 60 minutes without use or 24 hours after its start.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use axum::extract::rejection::JsonRejection;
@@ -30,6 +30,7 @@ use subtle::ConstantTimeEq;
 
 use crate::db::{NewSession, Session};
 use crate::server::AppState;
+use crate::throttle::Attempt;
 
 /// The session cookie. The `__Host-` prefix makes browsers require `Secure`
 /// and `Path=/` and refuse a `Domain`, so no sibling host can set it.
@@ -154,6 +155,45 @@ pub struct SessionInfo {
     pub csrf_token: String,
 }
 
+/// Starts a password check for `username` from `ip` under the throttle
+/// (TAD 7.1): after 5 failures in 15 minutes, for this account or this IP,
+/// it waits and logs a warning. The attempt counts as a failure from here
+/// on, so parallel attempts see it, and one that ends early (a closed
+/// connection, a database error) stays a failure. Call
+/// `state.throttle.succeed` when the password is right.
+pub(crate) async fn throttled(
+    state: &AppState,
+    username: &str,
+    ip: IpAddr,
+) -> Result<Attempt, Box<Response>> {
+    let attempt = match state.throttle.begin(username, ip, Instant::now()) {
+        Ok(attempt) => attempt,
+        Err(retry) => {
+            let mut response = error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many password attempts. Try again later",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(retry.as_secs()));
+            return Err(Box::new(response));
+        }
+    };
+    if !attempt.wait.is_zero() {
+        // {:?} escapes control characters, so a crafted name cannot forge
+        // log lines. The name is cut, so it cannot flood the log either.
+        let shown: String = username.chars().take(64).collect();
+        eprintln!(
+            "lodger: WARNING: {} failed logins in 15 minutes for account {shown:?} \
+             or from {ip}; this attempt waits {} s",
+            attempt.failures,
+            attempt.wait.as_secs()
+        );
+        tokio::time::sleep(attempt.wait).await;
+    }
+    Ok(attempt)
+}
+
 /// `POST /api/session`: log in.
 pub async fn login(
     State(state): State<AppState>,
@@ -169,35 +209,10 @@ pub async fn login(
     };
     let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
 
-    // After 5 failures in 15 minutes, for this account or this IP, wait. The
-    // attempt counts as a failure from here on, so parallel attempts see
-    // it, and one that ends early (a closed connection, a database error)
-    // stays a failure.
-    let attempt = match state.throttle.begin(&login.username, ip, Instant::now()) {
+    let attempt = match throttled(&state, &login.username, ip).await {
         Ok(attempt) => attempt,
-        Err(retry) => {
-            let mut response = error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "too many login attempts. Try again later",
-            );
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from(retry.as_secs()));
-            return response;
-        }
+        Err(response) => return *response,
     };
-    if !attempt.wait.is_zero() {
-        // {:?} escapes control characters, so a crafted name cannot forge
-        // log lines. The name is cut, so it cannot flood the log either.
-        let shown: String = login.username.chars().take(64).collect();
-        eprintln!(
-            "lodger: WARNING: {} failed logins in 15 minutes for account {shown:?} \
-             or from {ip}; this attempt waits {} s",
-            attempt.failures,
-            attempt.wait.as_secs()
-        );
-        tokio::time::sleep(attempt.wait).await;
-    }
 
     let account = match state.db.find_account(login.username.clone()).await {
         Ok(account) => account,
@@ -280,7 +295,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
 }
 
 /// The SHA-256 of the request's session token, which names its session.
-fn session_key(headers: &HeaderMap) -> Option<[u8; 32]> {
+pub(crate) fn session_key(headers: &HeaderMap) -> Option<[u8; 32]> {
     cookie_token(headers).map(|token| token_hash(&token))
 }
 

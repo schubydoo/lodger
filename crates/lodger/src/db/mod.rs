@@ -35,6 +35,24 @@ pub struct Account {
     pub password_hash: String,
 }
 
+/// An account as the account page shows it: no password hash.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AccountInfo {
+    pub id: i64,
+    pub username: String,
+    pub created_at: String,
+    pub password_changed_at: String,
+}
+
+/// What [`Db::delete_account`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deleted {
+    Yes,
+    NoSuchAccount,
+    /// Refused: it is the last account, and Lodger would be locked.
+    LastAccount,
+}
+
 /// The data of a new session.
 #[derive(Debug, Clone)]
 pub struct NewSession {
@@ -154,6 +172,137 @@ impl Db {
                 )?;
                 tx.commit()?;
                 Ok(true)
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// Every account, by name.
+    pub async fn list_accounts(&self) -> Result<Vec<AccountInfo>, String> {
+        self.conn
+            .call(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT id, username, created_at, password_changed_at
+                     FROM accounts ORDER BY username",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok(AccountInfo {
+                        id: r.get(0)?,
+                        username: r.get(1)?,
+                        created_at: r.get(2)?,
+                        password_changed_at: r.get(3)?,
+                    })
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Adds an account. Returns its id, or `None` when the name is taken,
+    /// compared without regard to case.
+    pub async fn create_account(
+        &self,
+        username: String,
+        password_hash: String,
+    ) -> Result<Option<i64>, String> {
+        self.conn
+            .call(move |c| {
+                let inserted = c.execute(
+                    &format!(
+                        "INSERT INTO accounts (username, password_hash, created_at, password_changed_at)
+                         VALUES (?1, ?2, {NOW}, {NOW})"
+                    ),
+                    [&username, &password_hash],
+                );
+                match inserted {
+                    Ok(_) => Ok(Some(c.last_insert_rowid())),
+                    Err(rusqlite::Error::SqliteFailure(e, _))
+                        if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+                    {
+                        Ok(None)
+                    }
+                    Err(e) => Err(e),
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Deletes an account and, through the foreign key, all its sessions
+    /// (ASVS 7.4.2). The count and the delete run in one transaction, so two
+    /// parallel deletes cannot remove the last two accounts.
+    pub async fn delete_account(&self, id: i64) -> Result<Deleted, String> {
+        self.conn
+            .call(move |c| {
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let count: i64 = tx.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = ?1)",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                let outcome = if !exists {
+                    Deleted::NoSuchAccount
+                } else if count <= 1 {
+                    Deleted::LastAccount
+                } else {
+                    tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
+                    Deleted::Yes
+                };
+                tx.commit()?;
+                Ok(outcome)
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// The account with this id.
+    pub async fn account_by_id(&self, id: i64) -> Result<Option<Account>, String> {
+        self.conn
+            .call(move |c| {
+                c.query_row(
+                    "SELECT id, username, password_hash FROM accounts WHERE id = ?1",
+                    [id],
+                    |r| {
+                        Ok(Account {
+                            id: r.get(0)?,
+                            username: r.get(1)?,
+                            password_hash: r.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+            })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Stores a new password hash and ends every session of the account
+    /// except `keep` (ASVS 7.4.3), in one transaction. Returns how many
+    /// sessions ended.
+    pub async fn change_password(
+        &self,
+        account_id: i64,
+        password_hash: String,
+        keep: [u8; 32],
+    ) -> Result<usize, String> {
+        self.conn
+            .call(move |c| {
+                let tx = c.transaction()?;
+                tx.execute(
+                    &format!(
+                        "UPDATE accounts SET password_hash = ?1, password_changed_at = {NOW}
+                         WHERE id = ?2"
+                    ),
+                    rusqlite::params![password_hash, account_id],
+                )?;
+                let ended = tx.execute(
+                    "DELETE FROM sessions WHERE account_id = ?1 AND token_sha256 != ?2",
+                    rusqlite::params![account_id, keep.as_slice()],
+                )?;
+                tx.commit()?;
+                Ok(ended)
             })
             .await
             .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
