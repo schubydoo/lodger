@@ -7,21 +7,22 @@
 //! - `DELETE /api/session` ends the session.
 //!
 //! [`require_session`] guards every other API route: without a live session
-//! it answers 401 and runs nothing. A session ends after 60 minutes without
-//! use or 24 hours after its start.
+//! it answers 401 and runs nothing. On a request that is not GET or HEAD, it
+//! also needs the session's token in `X-CSRF-Token`, or it answers 403. A
+//! session ends after 60 minutes without use or 24 hours after its start.
 
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use axum::Json;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
-use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::extract::{ConnectInfo, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::db::{NewSession, Session};
 use crate::server::AppState;
@@ -93,37 +94,36 @@ fn lookup_failed() -> Response {
     )
 }
 
-/// Middleware for the protected routes: 401 without a live session. The
-/// handler can read the [`Session`] from the request extensions.
+/// The header that carries the session's CSRF token.
+pub const CSRF_HEADER: &str = "x-csrf-token";
+
+/// Whether `headers` carry the session's CSRF token, compared in constant
+/// time.
+fn csrf_matches(headers: &HeaderMap, session: &Session) -> bool {
+    headers
+        .get(CSRF_HEADER)
+        .is_some_and(|sent| sent.as_bytes().ct_eq(session.csrf_token.as_bytes()).into())
+}
+
+/// Middleware for the protected routes: 401 without a live session, and 403
+/// for an unsafe request without the session's CSRF token. The handler can
+/// read the [`Session`] from the request extensions.
 pub async fn require_session(
     State(state): State<AppState>,
     mut req: Request,
     next: Next,
 ) -> Response {
-    match lookup(&state, req.headers()).await {
-        Ok(Some(session)) => {
-            req.extensions_mut().insert(session);
-            next.run(req).await
-        }
-        Ok(None) => unauthorized(),
-        Err(()) => lookup_failed(),
+    let session = match lookup(&state, req.headers()).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return unauthorized(),
+        Err(()) => return lookup_failed(),
+    };
+    let safe = req.method() == Method::GET || req.method() == Method::HEAD;
+    if !safe && !csrf_matches(req.headers(), &session) {
+        return error(StatusCode::FORBIDDEN, "missing or wrong X-CSRF-Token");
     }
-}
-
-/// An extractor for handlers outside [`require_session`]: it rejects the
-/// request with 401 without a live session.
-pub struct CurrentSession(pub Session);
-
-impl FromRequestParts<AppState> for CurrentSession {
-    type Rejection = Response;
-
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
-        match lookup(state, &parts.headers).await {
-            Ok(Some(session)) => Ok(Self(session)),
-            Ok(None) => Err(unauthorized()),
-            Err(()) => Err(lookup_failed()),
-        }
-    }
+    req.extensions_mut().insert(session);
+    next.run(req).await
 }
 
 #[derive(Deserialize)]
@@ -155,11 +155,8 @@ pub async fn login(
     headers: HeaderMap,
     body: Result<Json<Login>, JsonRejection>,
 ) -> Response {
-    // Login needs no session, but it changes state. Task 2.4 adds the
-    // general Origin and CSRF checks.
-    if !crate::ws::same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+    // Login has no session yet, so no CSRF token. The Origin rule in
+    // `security.rs` and the JSON body stand in for it (TAD 7.4).
     let login = match body {
         Ok(Json(login)) => login,
         Err(rejection) => return rejection.into_response(),
@@ -254,7 +251,7 @@ pub async fn login(
 }
 
 /// `GET /api/session`: who is logged in, with the CSRF token.
-pub async fn current(CurrentSession(session): CurrentSession) -> Json<SessionInfo> {
+pub async fn current(Extension(session): Extension<Session>) -> Json<SessionInfo> {
     Json(SessionInfo {
         username: session.username,
         csrf_token: session.csrf_token,
@@ -263,15 +260,8 @@ pub async fn current(CurrentSession(session): CurrentSession) -> Json<SessionInf
 
 /// `DELETE /api/session`: log out. The session stops working at once on
 /// every endpoint, because each request looks it up in the database.
-pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    CurrentSession(_): CurrentSession,
-) -> Response {
-    if !crate::ws::same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let token = cookie_token(&headers).expect("CurrentSession found the cookie");
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token = cookie_token(&headers).expect("require_session found the cookie");
     if let Err(e) = state.db.delete_session(token_hash(&token)).await {
         eprintln!("lodger: logout: the database failed: {e}");
         return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot end the session");

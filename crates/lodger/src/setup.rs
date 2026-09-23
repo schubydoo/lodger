@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use lodger_core::validate::Name;
 use serde::{Deserialize, Serialize};
@@ -109,19 +109,15 @@ fn error(code: StatusCode, message: impl Into<String>) -> Response {
 
 /// `POST /api/setup`: creates the first account.
 ///
-/// The body is read only after the Origin and the setup state are checked,
-/// so a closed setup answers 404 whatever the request carries.
+/// The body is read only after the setup state is checked, so a closed setup
+/// answers 404 whatever the request carries.
 pub async fn claim(
     State(state): State<AppState>,
-    headers: HeaderMap,
     body: Result<Json<Claim>, JsonRejection>,
 ) -> Response {
-    // 1. Only a page from this server may claim the install. Setup needs no
-    //    session, but it changes state (review rule 7). Task 2.4 adds the
-    //    general Origin and CSRF checks.
-    if !crate::ws::same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+    // 1. Only a page from this server may claim the install: the Origin
+    //    rule in `security.rs` ran before this handler. Setup has no session,
+    //    so no CSRF token (TAD 7.4).
     // 2. Setup must be open, and the token must match. Nothing else runs for
     //    a wrong token.
     if state

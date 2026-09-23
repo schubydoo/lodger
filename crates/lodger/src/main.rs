@@ -9,6 +9,7 @@ mod config;
 mod console;
 mod db;
 mod passwords;
+mod security;
 mod server;
 mod setup;
 mod throttle;

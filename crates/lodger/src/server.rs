@@ -5,19 +5,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware;
 use axum::response::Response;
 use axum::routing::{any, get, post};
 use ipnet::IpNet;
 use lodger_virt::Host;
 
-use crate::assets::{self, Embedded};
+use crate::assets::{self, AssetSource, Embedded};
 use crate::config::Config;
 use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
 use crate::throttle::Throttle;
-use crate::{api, auth, console, ws};
+use crate::{api, auth, console, security, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -28,6 +28,10 @@ pub struct AppState {
     pub throttle: Arc<Throttle>,
     /// Proxies whose forwarded client address Lodger believes (TAD 7.5).
     pub trusted_proxies: Arc<Vec<IpNet>>,
+    /// The origin of `public_url`, for the Origin check (TAD 7.4).
+    pub public_origin: Option<Arc<str>>,
+    /// The Content-Security-Policy for every response.
+    pub csp: Arc<HeaderValue>,
 }
 
 impl AppState {
@@ -36,8 +40,15 @@ impl AppState {
         db: Db,
         setup: Option<SetupToken>,
         trusted_proxies: Vec<IpNet>,
+        public_origin: Option<String>,
     ) -> Self {
+        let page = Embedded.get(assets::FALLBACK).map_or_else(
+            || assets::STUB_PAGE.to_owned(),
+            |a| String::from_utf8_lossy(&a.bytes).into_owned(),
+        );
         Self {
+            csp: Arc::new(security::csp(&page, public_origin.as_deref())),
+            public_origin: public_origin.map(Arc::from),
             host,
             db,
             setup: Arc::new(std::sync::Mutex::new(setup)),
@@ -52,12 +63,17 @@ impl AppState {
 ///
 /// Every API route needs a live session (TAD 7.2), except health, setup,
 /// and login. New routes go into `protected`, so the guard is the default.
-/// The WebSocket routes get their session check in Task 2.5.
+/// The guard also checks `X-CSRF-Token` on unsafe requests. The WebSocket
+/// routes get their session check in Task 2.5.
+///
+/// Around everything: unsafe requests must come from a Lodger page, and
+/// every response gets the security headers (`security.rs`).
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
+        .route("/api/session", get(auth::current).delete(auth::logout))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,
@@ -65,11 +81,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
         .route("/api/setup", get(setup::status).post(setup::claim))
-        // Login is public; GET and DELETE check the session themselves.
-        .route(
-            "/api/session",
-            post(auth::login).get(auth::current).delete(auth::logout),
-        )
+        .route("/api/session", post(auth::login))
         .merge(protected)
         .route("/ws/events", get(ws::events))
         .route("/ws/vms/{id}/vnc", get(console::vnc))
@@ -78,6 +90,14 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", any(reserved))
         .route("/ws/{*rest}", any(reserved))
         .fallback(web_ui)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::require_same_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::add_headers,
+        ))
         .with_state(state)
 }
 
@@ -100,7 +120,13 @@ pub async fn serve(config: Config) -> Result<(), String> {
         .map_err(|e| format!("cannot prepare the password check: {e}"))?;
     let setup = open_setup(&db).await?;
     let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
-    let state = AppState::new(Arc::new(host), db, setup, config.trusted_proxies.clone());
+    let state = AppState::new(
+        Arc::new(host),
+        db,
+        setup,
+        config.trusted_proxies.clone(),
+        config.public_url.clone(),
+    );
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
@@ -254,6 +280,7 @@ mod tests {
             crate::db::Db::in_memory().await,
             None,
             vec![],
+            None,
         );
         let cookie = log_in_directly(&state).await;
         let addr = start(state).await;
@@ -264,9 +291,20 @@ mod tests {
     /// Serves `test:///default` with setup open and no account. Returns the
     /// address, the token text, and the state.
     async fn serve_setup() -> (String, String, AppState) {
+        serve_setup_at(None).await
+    }
+
+    /// [`serve_setup`] with a `public_url` origin.
+    async fn serve_setup_at(public_origin: Option<&str>) -> (String, String, AppState) {
         let host = Arc::new(Host::start(TEST_URI).unwrap());
         let (text, token) = crate::setup::SetupToken::generate(std::time::Instant::now()).unwrap();
-        let state = AppState::new(host, crate::db::Db::in_memory().await, Some(token), vec![]);
+        let state = AppState::new(
+            host,
+            crate::db::Db::in_memory().await,
+            Some(token),
+            vec![],
+            public_origin.map(str::to_owned),
+        );
         let addr = start(state.clone()).await;
         (addr, text, state)
     }
@@ -321,10 +359,15 @@ mod tests {
         raw(addr, "GET", path, &headers, "").await.0
     }
 
-    /// A POST with a JSON body and the server's test session, if any.
+    /// What a browser sends on a request from a Lodger page.
+    const SAME_ORIGIN: &str = "Sec-Fetch-Site: same-origin";
+
+    /// A POST from a Lodger page with a JSON body and the server's test
+    /// session, if any.
     async fn post_json(addr: &str, path: &str, body: &Value) -> (u16, String) {
         let mut headers = cookie_for(addr);
         headers.push("Content-Type: application/json".into());
+        headers.push(SAME_ORIGIN.into());
         let (status, out) = raw(addr, "POST", path, &headers, &body.to_string()).await;
         (status, body_of(&out))
     }
@@ -376,15 +419,8 @@ mod tests {
             404
         );
         // No body and no Content-Type at all.
-        let mut s = tokio::net::TcpStream::connect(&addr).await.unwrap();
-        let req = format!(
-            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
-             Content-Length: 0\r\n\r\n"
-        );
-        s.write_all(req.as_bytes()).await.unwrap();
-        let mut out = String::new();
-        s.read_to_string(&mut out).await.unwrap();
-        assert!(out.starts_with("HTTP/1.1 404"), "{out}");
+        let (status, out) = raw(&addr, "POST", "/api/setup", &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(status, 404, "{out}");
     }
 
     #[tokio::test]
@@ -616,7 +652,7 @@ mod tests {
             addr,
             "POST",
             "/api/session",
-            &["Content-Type: application/json".into()],
+            &["Content-Type: application/json".into(), SAME_ORIGIN.into()],
             &body,
         )
         .await;
@@ -645,11 +681,16 @@ mod tests {
         for path in ["/api/session", "/api/host", "/api/vms"] {
             assert_eq!(get_as(&addr, path, Some(&cookie)).await, 200, "{path}");
         }
+        let csrf = info["csrf_token"].as_str().unwrap();
         let (status, out) = raw(
             &addr,
             "DELETE",
             "/api/session",
-            &[format!("Cookie: {cookie}")],
+            &[
+                format!("Cookie: {cookie}"),
+                SAME_ORIGIN.into(),
+                format!("X-CSRF-Token: {csrf}"),
+            ],
             "",
         )
         .await;
@@ -673,32 +714,93 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_and_logout_refuse_a_page_from_another_origin() {
+    async fn an_unsafe_request_from_another_origin_fails_with_403() {
         let (addr, token, _state) = serve_setup().await;
-        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
-        let body = serde_json::json!({"username": "admin", "password": GOOD_PASSWORD}).to_string();
-        let evil = "Origin: http://evil.example".to_string();
+        let setup = claim(&token, "admin", GOOD_PASSWORD).to_string();
+        let login_body =
+            serde_json::json!({"username": "admin", "password": GOOD_PASSWORD}).to_string();
+        let json = "Content-Type: application/json".to_string();
+        let refused = [
+            // No browser header at all, as from a plain script.
+            vec![],
+            vec!["Origin: http://evil.example".into()],
+            // A sibling subdomain: the same site, but not the same origin.
+            vec![
+                "Sec-Fetch-Site: same-site".into(),
+                "Origin: https://evil.lodger.lan".into(),
+            ],
+            vec!["Sec-Fetch-Site: cross-site".into()],
+            // Origin equal to Host is not enough: Host can be forged.
+            vec![format!("Origin: http://{addr}")],
+        ];
+        for extra in &refused {
+            let mut headers = vec![json.clone()];
+            headers.extend(extra.iter().cloned());
+            for (path, body) in [("/api/setup", &setup), ("/api/session", &login_body)] {
+                let (status, _) = raw(&addr, "POST", path, &headers, body).await;
+                assert_eq!(status, 403, "{path} with {extra:?}");
+            }
+        }
+        // Nothing ran: setup is still open.
+        assert_eq!(get_as(&addr, "/api/setup", None).await, 200);
+    }
+
+    #[tokio::test]
+    async fn an_origin_equal_to_public_url_passes() {
+        let (addr, token, _state) = serve_setup_at(Some("https://lodger.lan")).await;
         let (status, _) = raw(
             &addr,
             "POST",
-            "/api/session",
-            &["Content-Type: application/json".into(), evil.clone()],
-            &body,
+            "/api/setup",
+            &[
+                "Content-Type: application/json".into(),
+                "Origin: https://lodger.lan".into(),
+            ],
+            &claim(&token, "admin", GOOD_PASSWORD).to_string(),
         )
         .await;
-        assert_eq!(status, 403);
+        assert_eq!(status, 201);
+    }
+
+    #[tokio::test]
+    async fn logout_needs_the_csrf_token_of_its_own_session() {
+        let (addr, token, _state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
         let (_, cookie, _) = login(&addr, "admin", GOOD_PASSWORD).await;
         let cookie = cookie.unwrap();
-        let (status, _) = raw(
-            &addr,
-            "DELETE",
-            "/api/session",
-            &[format!("Cookie: {cookie}"), evil],
-            "",
-        )
-        .await;
-        assert_eq!(status, 403);
+        // A second session's token does not fit the first session.
+        let (_, _, other) = login(&addr, "admin", GOOD_PASSWORD).await;
+        let other: Value = serde_json::from_str(&other).unwrap();
+        let other_csrf = other["csrf_token"].as_str().unwrap();
+        for csrf in [None, Some("0".repeat(64)), Some(other_csrf.to_owned())] {
+            let mut headers = vec![format!("Cookie: {cookie}"), SAME_ORIGIN.into()];
+            headers.extend(csrf.map(|t| format!("X-CSRF-Token: {t}")));
+            let (status, _) = raw(&addr, "DELETE", "/api/session", &headers, "").await;
+            assert_eq!(status, 403, "{headers:?}");
+        }
         assert_eq!(get_as(&addr, "/api/session", Some(&cookie)).await, 200);
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_security_headers() {
+        let (addr, _host) = serve().await;
+        for (method, path) in [
+            ("GET", "/"),
+            ("GET", "/api/health"),
+            ("GET", "/api/missing"),
+            ("POST", "/api/session"),
+        ] {
+            let (_, out) = raw(&addr, method, path, &[], "").await;
+            let out = out.to_lowercase();
+            for header in [
+                "content-security-policy: default-src 'self'; script-src 'self'",
+                "referrer-policy: no-referrer",
+                "x-content-type-options: nosniff",
+            ] {
+                assert!(out.contains(header), "{method} {path} lacks {header}");
+            }
+            assert!(out.contains("frame-ancestors 'none'"), "{method} {path}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
