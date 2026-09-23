@@ -1,0 +1,137 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import VmActions from './VmActions.svelte';
+import QueryHarness from '$lib/test/QueryHarness.svelte';
+import { testClient, vms } from '$lib/test/fixtures';
+import { keys, type Vm } from '$lib/api';
+
+const [running, shutoff] = vms;
+
+function show(vm: Vm, respond: () => Response = () => new Response(null, { status: 204 })) {
+	const fetcher = vi.fn<(path: string, init?: RequestInit) => Promise<Response>>(async () =>
+		respond()
+	);
+	vi.stubGlobal('fetch', fetcher);
+	const client = testClient();
+	client.setQueryData(keys.session, { username: 'admin', csrf_token: 'csrf1' });
+	const view = render(QueryHarness, { props: { client, component: VmActions, props: { vm } } });
+	return { client, fetcher, view };
+}
+
+const button = (name: string) => screen.getByRole('button', { name });
+const typeName = (value: string) =>
+	fireEvent.input(screen.getByLabelText(`Type ${running.name} to force it off`), {
+		target: { value }
+	});
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('the power buttons', () => {
+	it('offers Shut down and Force off for a running VM, and Start for a shut-off one', () => {
+		show(running);
+		expect(button('Shut down alpha')).toBeInTheDocument();
+		expect(button('Force off alpha')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Start alpha' })).toBeNull();
+		show(shutoff);
+		expect(button('Start beta')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Shut down beta' })).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Force off beta' })).toBeNull();
+	});
+
+	it('starts a VM with the CSRF token and no body', async () => {
+		const { fetcher } = show(shutoff);
+		await fireEvent.click(button('Start beta'));
+		await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+		const [path, init] = fetcher.mock.calls[0];
+		expect(path).toBe(`/api/vms/${shutoff.uuid}/actions/start`);
+		expect(init?.method).toBe('POST');
+		expect((init?.headers as Record<string, string>)['x-csrf-token']).toBe('csrf1');
+		expect(init?.body).toBeUndefined();
+	});
+
+	it('says that a shutdown waits for the guest, until the state changes', async () => {
+		const { view } = show(running);
+		await fireEvent.click(button('Shut down alpha'));
+		expect(await screen.findByRole('status')).toHaveTextContent(
+			'Shutdown requested. alpha stops when its guest finishes.'
+		);
+		// rerender unwraps a top-level `props` key, so the harness's own
+		// `props` prop needs a second level.
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		expect(await screen.findByRole('button', { name: 'Start alpha' })).toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+	});
+
+	it('drops the shutdown note when the VM stopped before the answer came', async () => {
+		let answer: (res: Response) => void = () => {};
+		const { view } = show(running);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)))
+		);
+		await fireEvent.click(button('Shut down alpha'));
+		// The event refreshes the list first, then the 204 arrives.
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		answer(new Response(null, { status: 204 }));
+		expect(await screen.findByRole('button', { name: 'Start alpha' })).toBeEnabled();
+		expect(screen.queryByRole('status')).toBeNull();
+	});
+
+	it('closes the Force off field when the VM stops for another reason', async () => {
+		const { view } = show(running);
+		await fireEvent.click(button('Force off alpha'));
+		await typeName('alpha');
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		expect(await screen.findByRole('button', { name: 'Start alpha' })).toBeInTheDocument();
+		expect(screen.queryByLabelText('Type alpha to force it off')).toBeNull();
+	});
+
+	it('forces off only after the exact name is typed, and sends it', async () => {
+		const { fetcher } = show(running);
+		await fireEvent.click(button('Force off alpha'));
+		const force = button('Force off');
+		expect(force).toBeDisabled();
+		await typeName('ALPHA');
+		expect(force).toBeDisabled();
+		// jsdom still runs a click on a disabled button: nothing may go out.
+		await fireEvent.click(force);
+		expect(fetcher).not.toHaveBeenCalled();
+		await typeName('alpha');
+		expect(force).toBeEnabled();
+		await fireEvent.click(force);
+		await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+		const [path, init] = fetcher.mock.calls[0];
+		expect(path).toBe(`/api/vms/${running.uuid}/actions/force-off`);
+		expect(JSON.parse(init?.body as string)).toEqual({ confirm: 'alpha' });
+		// Done: the row shows the normal buttons again.
+		expect(await screen.findByRole('button', { name: 'Force off alpha' })).toBeInTheDocument();
+	});
+
+	it('cancels a force off without sending anything', async () => {
+		const { fetcher } = show(running);
+		await fireEvent.click(button('Force off alpha'));
+		await typeName('alpha');
+		await fireEvent.click(button('Cancel'));
+		expect(button('Force off alpha')).toBeInTheDocument();
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it('shows the server error as a sentence', async () => {
+		show(
+			shutoff,
+			() => new Response(JSON.stringify({ error: 'the VM is running already' }), { status: 409 })
+		);
+		await fireEvent.click(button('Start beta'));
+		expect(await screen.findByRole('alert')).toHaveTextContent('The VM is running already.');
+		expect(button('Start beta')).toBeEnabled();
+	});
+
+	it('drops the session on a 401', async () => {
+		const { client } = show(
+			shutoff,
+			() => new Response(JSON.stringify({ error: 'log in first' }), { status: 401 })
+		);
+		await fireEvent.click(button('Start beta'));
+		await waitFor(() => expect(client.getQueryData(keys.session)).toBeNull());
+	});
+});

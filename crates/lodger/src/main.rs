@@ -1,6 +1,7 @@
 //! The `lodger` binary: parse the command line and dispatch.
 
 mod accounts;
+mod actions;
 mod admin;
 mod api;
 mod assets;

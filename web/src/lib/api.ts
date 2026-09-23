@@ -132,6 +132,26 @@ export function problemText(error: unknown): string {
 	return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
+/** A power action on a VM (`crates/lodger-virt/src/power.rs`). */
+export type VmAction = 'start' | 'shutdown' | 'force-off';
+
+/**
+ * Asks for a power action. A 204 means that libvirt took the call: the new
+ * state arrives through the events socket, which refreshes the VM list.
+ * Force off needs `confirm`, the VM's name as the user typed it.
+ */
+export function vmAction(
+	id: string,
+	action: VmAction,
+	options: { confirm?: string; csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('POST', `/api/vms/${id}/actions/${action}`, {
+		body: options.confirm === undefined ? undefined : { confirm: options.confirm },
+		csrf: options.csrf,
+		fetcher: options.fetcher
+	});
+}
+
 /** The session, or `null` when nobody is logged in. */
 export async function fetchSession(fetcher: typeof fetch = fetch): Promise<Session | null> {
 	try {

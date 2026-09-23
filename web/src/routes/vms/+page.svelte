@@ -3,6 +3,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import * as Table from '$lib/components/ui/table';
 	import StateBadge from '$lib/components/StateBadge.svelte';
+	import VmActions from '$lib/components/VmActions.svelte';
 	import { fetchVms, formatKib, keys } from '$lib/api';
 
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
@@ -30,7 +31,8 @@
 				<Table.Head scope="col" class="text-right">vCPUs</Table.Head>
 				<Table.Head scope="col" class="text-right">Memory</Table.Head>
 				<Table.Head scope="col">Autostart</Table.Head>
-				<Table.Head scope="col"><span class="sr-only">Actions</span></Table.Head>
+				<Table.Head scope="col"><span class="sr-only">Power</span></Table.Head>
+				<Table.Head scope="col"><span class="sr-only">Console</span></Table.Head>
 			</Table.Row>
 		</Table.Header>
 		<Table.Body>
@@ -46,6 +48,9 @@
 					<Table.Cell class="text-right tabular-nums">{vm.vcpus}</Table.Cell>
 					<Table.Cell class="text-right tabular-nums">{formatKib(vm.memory_kib)}</Table.Cell>
 					<Table.Cell>{vm.autostart ? 'Yes' : 'No'}</Table.Cell>
+					<Table.Cell>
+						<VmActions {vm} />
+					</Table.Cell>
 					<Table.Cell>
 						{#if vm.state === 'running'}
 							<!-- The label names the VM, and it contains the visible

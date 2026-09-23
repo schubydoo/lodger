@@ -18,7 +18,7 @@ use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
-use crate::{accounts, api, auth, console, security, ws};
+use crate::{accounts, actions, api, auth, console, security, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
+        .route("/api/vms/{id}/actions/{action}", post(actions::run))
         .route("/api/session", get(auth::current).delete(auth::logout))
         .route("/api/ws-tickets", post(auth::issue_ticket))
         .route("/api/accounts", get(accounts::list).post(accounts::create))
@@ -213,6 +214,8 @@ mod tests {
     use serde_json::Value;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::tungstenite::Message;
+
+    use uuid::Uuid;
 
     use super::{AppState, router};
     use crate::ws::Update;
@@ -1081,6 +1084,100 @@ mod tests {
         ] {
             assert!(!all.contains(secret), "{secret:?} is in the audit log");
         }
+    }
+
+    /// The state of VM `id` as the API reports it, polled until it is
+    /// `want` or 5 seconds pass. Returns the last state.
+    async fn wait_for_state(addr: &str, tab: &Tab, id: Uuid, want: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (_, vm) = call(addr, tab, "GET", &format!("/api/vms/{id}"), None).await;
+            let state = vm["state"].as_str().unwrap_or("missing").to_owned();
+            if state == want || Instant::now() > deadline {
+                return state;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn start_shut_down_and_force_off_change_the_state_and_are_audited() {
+        let (addr, token, state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let outside = Virt::open(TEST_URI).await.unwrap();
+        let name = "lodger-spike-power-api";
+        let id = outside
+            .job(move |c| c.define_domain_xml(&domain_xml(name))?.uuid())
+            .await
+            .unwrap();
+        assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
+        let act = |action: &str| format!("/api/vms/{id}/actions/{action}");
+
+        let start = Instant::now();
+        assert_eq!(call(&addr, &tab, "POST", &act("start"), None).await.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "running").await, "running");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let (status, answer) = call(&addr, &tab, "POST", &act("start"), None).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("the VM is running already"))
+        );
+
+        assert_eq!(
+            call(&addr, &tab, "POST", &act("shutdown"), None).await.0,
+            204
+        );
+        assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
+
+        assert_eq!(call(&addr, &tab, "POST", &act("start"), None).await.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "running").await, "running");
+        for body in [
+            None,
+            Some(serde_json::json!({"confirm": "LODGER-SPIKE-POWER-API"})),
+        ] {
+            let (status, answer) = call(&addr, &tab, "POST", &act("force-off"), body).await;
+            assert_eq!(status, 422, "{answer}");
+        }
+        assert_eq!(wait_for_state(&addr, &tab, id, "running").await, "running");
+        let confirm = serde_json::json!({ "confirm": name });
+        assert_eq!(
+            call(&addr, &tab, "POST", &act("force-off"), Some(confirm))
+                .await
+                .0,
+            204
+        );
+        assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
+
+        assert_eq!(call(&addr, &tab, "POST", &act("reboot"), None).await.0, 404);
+        let unknown = format!("/api/vms/{}/actions/start", Uuid::from_u128(0xdead));
+        assert_eq!(call(&addr, &tab, "POST", &unknown, None).await.0, 404);
+        let no_session = raw(&addr, "POST", &act("start"), &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(no_session.0, 401);
+
+        let lines = audit_lines(&state).await;
+        let lifecycle: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("vm.lifecycle"))
+            .map(String::as_str)
+            .collect();
+        let row = |result: &str, detail: &str| {
+            format!("vm.lifecycle admin 127.0.0.1 {name} {result} {detail}")
+        };
+        assert_eq!(
+            lifecycle,
+            [
+                row("ok", r#"{"action":"start"}"#),
+                row("failed", r#"{"action":"start","reason":"wrong_state"}"#),
+                row("ok", r#"{"action":"shutdown"}"#),
+                row("ok", r#"{"action":"start"}"#),
+                row("ok", r#"{"action":"force-off"}"#),
+            ]
+        );
+        outside
+            .job(move |c| c.lookup_domain_by_uuid(id)?.undefine())
+            .await
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

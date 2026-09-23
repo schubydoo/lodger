@@ -43,6 +43,10 @@ pub enum Error {
     Task(#[from] tokio::task::JoinError),
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    /// The domain is in the wrong state for the action, for example a
+    /// start of a running domain.
+    #[error("{0}")]
+    WrongState(&'static str),
 }
 
 impl Error {
@@ -51,6 +55,18 @@ impl Error {
         use virt::error::ErrorNumber::{NoDomain, NoNetwork, NoStoragePool};
         matches!(self, Self::Libvirt(e)
             if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool)))
+    }
+
+    /// `true` when the object is in the wrong state for the call, for
+    /// example a start of a running domain.
+    pub fn is_invalid_operation(&self) -> bool {
+        match self {
+            Self::WrongState(_) => true,
+            Self::Libvirt(e) => {
+                e.code().known() == Some(virt::error::ErrorNumber::OperationInvalid)
+            }
+            _ => false,
+        }
     }
 }
 

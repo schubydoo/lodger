@@ -40,6 +40,9 @@ pub struct Detail {
     /// The user who ran `sudo lodger admin`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sudo_user: Option<String>,
+    /// The action on the target, such as `start`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<&'static str>,
     /// Why a change failed, as a fixed code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
@@ -103,6 +106,13 @@ impl Entry {
     /// The account that the change touched.
     pub fn target_account(mut self, name: impl Into<String>) -> Self {
         self.target_kind = Some("account");
+        self.target = Some(name.into());
+        self
+    }
+
+    /// The VM that the change touched.
+    pub fn target_vm(mut self, name: impl Into<String>) -> Self {
+        self.target_kind = Some("vm");
         self.target = Some(name.into());
         self
     }

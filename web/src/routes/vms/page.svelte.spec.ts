@@ -37,6 +37,14 @@ describe('the VM list', () => {
 		expect(screen.queryByRole('link', { name: 'Console of beta' })).toBeNull();
 	});
 
+	it('offers the power actions that fit each VM state', () => {
+		show((c) => c.setQueryData(keys.vms, vms));
+		const [, alpha, beta] = screen.getAllByRole('row');
+		expect(within(alpha).getByRole('button', { name: 'Shut down alpha' })).toBeInTheDocument();
+		expect(within(alpha).getByRole('button', { name: 'Force off alpha' })).toBeInTheDocument();
+		expect(within(beta).getByRole('button', { name: 'Start beta' })).toBeInTheDocument();
+	});
+
 	it('puts the table in a named region that a keyboard can focus', () => {
 		show((c) => c.setQueryData(keys.vms, vms));
 		const region = screen.getByRole('region', { name: 'Virtual machines' });
