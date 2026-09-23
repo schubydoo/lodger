@@ -2,12 +2,16 @@
 
 mod api;
 mod assets;
+mod auth;
 mod cli;
+mod client_ip;
 mod config;
 mod console;
 mod db;
+mod passwords;
 mod server;
 mod setup;
+mod throttle;
 mod ws;
 
 use clap::Parser;

@@ -296,3 +296,115 @@ async fn only_one_first_account_can_be_created() {
     assert_eq!(created, 1);
     assert_eq!(db.account_count().await.unwrap(), 1);
 }
+
+/// An account and one session, with the session's times set by `times`.
+async fn session_with(times: &'static str) -> (Db, [u8; 32]) {
+    let db = Db::in_memory().await;
+    assert!(
+        db.create_first_account("admin".into(), "hash".into())
+            .await
+            .unwrap()
+    );
+    let account = db.find_account("ADMIN".into()).await.unwrap().unwrap();
+    let hash = [7u8; 32];
+    db.create_session(super::NewSession {
+        token_sha256: hash,
+        account_id: account.id,
+        csrf_token: "csrf".into(),
+        client_ip: "127.0.0.1".into(),
+        user_agent: None,
+    })
+    .await
+    .unwrap();
+    db.call(move |c| c.execute(times, [])).await.unwrap();
+    (db, hash)
+}
+
+#[tokio::test]
+async fn a_fresh_session_is_live_and_finds_its_account() {
+    let (db, hash) = session_with("UPDATE sessions SET csrf_token = csrf_token").await;
+    let s = db.session(hash).await.unwrap().unwrap();
+    assert_eq!(s.username, "admin");
+    assert_eq!(s.csrf_token, "csrf");
+    assert!(db.session([8u8; 32]).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_session_ends_after_60_idle_minutes() {
+    let (db, hash) = session_with(
+        "UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-61 minutes')",
+    )
+    .await;
+    assert!(db.session(hash).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_session_ends_24_hours_after_its_start_even_when_used() {
+    let (db, hash) = session_with(
+        "UPDATE sessions SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 seconds')",
+    )
+    .await;
+    assert!(db.session(hash).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_absolute_end_is_24_hours_after_the_start() {
+    let (db, _) = session_with("UPDATE sessions SET csrf_token = csrf_token").await;
+    let hours: f64 = db
+        .call(|c| {
+            c.query_row(
+                "SELECT (julianday(expires_at) - julianday(created_at)) * 24 FROM sessions",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!((hours - 24.0).abs() < 0.001, "{hours}");
+}
+
+#[tokio::test]
+async fn use_counts_as_activity() {
+    let (db, hash) = session_with(
+        "UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 minutes')",
+    )
+    .await;
+    assert!(db.session(hash).await.unwrap().is_some());
+    let age: f64 = db
+        .call(|c| {
+            c.query_row(
+                "SELECT (julianday('now') - julianday(last_seen_at)) * 86400 FROM sessions",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(age < 5.0, "last_seen_at is {age} s old");
+}
+
+#[tokio::test]
+async fn logout_deletes_the_session_and_a_login_drops_ended_ones() {
+    let (db, hash) = session_with("UPDATE sessions SET csrf_token = csrf_token").await;
+    db.delete_session(hash).await.unwrap();
+    assert!(db.session(hash).await.unwrap().is_none());
+
+    let (db, _) = session_with(
+        "UPDATE sessions SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 seconds')",
+    )
+    .await;
+    db.create_session(super::NewSession {
+        token_sha256: [9u8; 32],
+        account_id: 1,
+        csrf_token: "c".into(),
+        client_ip: "::1".into(),
+        user_agent: Some("test".into()),
+    })
+    .await
+    .unwrap();
+    let rows: i64 = db
+        .call(|c| c.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}

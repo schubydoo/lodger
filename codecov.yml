@@ -124,13 +124,17 @@ component_management:
       paths:
         - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
+        - crates/lodger/src/auth.rs
         - crates/lodger/src/cli.rs
+        - crates/lodger/src/client_ip.rs
         - crates/lodger/src/config.rs
         - crates/lodger/src/console.rs
         - crates/lodger/src/db/mod.rs
         - crates/lodger/src/db/tests.rs
+        - crates/lodger/src/passwords.rs
         - crates/lodger/src/server.rs
         - crates/lodger/src/setup.rs
+        - crates/lodger/src/throttle.rs
         - crates/lodger/src/ws.rs
     # The web UI selects its files by flag, not by path, so no path list needs
     # an update when a Svelte file appears.
