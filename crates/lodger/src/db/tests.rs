@@ -273,3 +273,26 @@ async fn a_file_that_is_not_a_database_is_an_error() {
     let err = Db::open(tmp.path()).await.unwrap_err();
     assert!(err.starts_with("cannot prepare"), "{err}");
 }
+
+/// The guard behind "two parallel claims create exactly one account": claims
+/// that pass the setup token check at the same time all reach this call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_one_first_account_can_be_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Db::open(tmp.path()).await.unwrap();
+    let calls = (0..8).map(|n| {
+        let db = db.clone();
+        tokio::spawn(async move {
+            db.create_first_account(format!("admin{n}"), "hash".into())
+                .await
+        })
+    });
+    let mut created = 0;
+    for call in calls {
+        if call.await.unwrap().unwrap() {
+            created += 1;
+        }
+    }
+    assert_eq!(created, 1);
+    assert_eq!(db.account_count().await.unwrap(), 1);
+}

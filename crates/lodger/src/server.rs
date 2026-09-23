@@ -12,6 +12,7 @@ use lodger_virt::Host;
 use crate::assets::{self, Embedded};
 use crate::config::Config;
 use crate::db::Db;
+use crate::setup::{self, Setup, SetupToken};
 use crate::{api, console, ws};
 
 /// What every handler can reach.
@@ -19,6 +20,7 @@ use crate::{api, console, ws};
 pub struct AppState {
     pub host: Arc<Host>,
     pub db: Db,
+    pub setup: Arc<Setup>,
 }
 
 /// Builds the router. Paths under `/api` and `/ws` without a handler answer
@@ -26,6 +28,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
+        .route("/api/setup", get(setup::status).post(setup::claim))
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
@@ -53,10 +56,12 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
 /// disconnected. A database that cannot be opened does.
 pub async fn serve(config: Config) -> Result<(), String> {
     let db = Db::open(&config.state_dir).await?;
+    let setup = open_setup(&db).await?;
     let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
     let state = AppState {
         host: Arc::new(host),
         db,
+        setup: Arc::new(std::sync::Mutex::new(setup)),
     };
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
@@ -80,6 +85,19 @@ pub async fn serve(config: Config) -> Result<(), String> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(fail)
+}
+
+/// Makes a setup token when no account exists and writes it to the log.
+async fn open_setup(db: &Db) -> Result<Option<SetupToken>, String> {
+    if db.account_count().await? > 0 {
+        return Ok(None);
+    }
+    let (text, token) = SetupToken::generate(std::time::Instant::now())?;
+    eprintln!(
+        "lodger: setup token: {text} (open Lodger in a browser and enter it to create the first \
+         account; it works once and for 60 minutes, and a restart writes a new one)"
+    );
+    Ok(Some(token))
 }
 
 /// One line that says which settings are in force.
@@ -145,9 +163,146 @@ mod tests {
         let app = router(AppState {
             host: Arc::clone(&host),
             db: crate::db::Db::in_memory().await,
+            setup: Arc::default(),
         });
         tokio::spawn(async move { axum::serve(listener, app).await });
         (addr, host)
+    }
+
+    /// Serves `test:///default` with setup open. Returns the address, the
+    /// token text, and the state.
+    async fn serve_setup() -> (String, String, AppState) {
+        let host = Arc::new(Host::start(TEST_URI).unwrap());
+        let (text, token) = crate::setup::SetupToken::generate(std::time::Instant::now()).unwrap();
+        let state = AppState {
+            host,
+            db: crate::db::Db::in_memory().await,
+            setup: Arc::new(std::sync::Mutex::new(Some(token))),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let app = router(state.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (addr, text, state)
+    }
+
+    /// A plain HTTP/1.1 POST with a JSON body. Returns the status and body.
+    async fn post_json(addr: &str, path: &str, body: &Value) -> (u16, String) {
+        let body = body.to_string();
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        let status = out[9..12].parse().unwrap();
+        let body = out.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
+        (status, body.to_string())
+    }
+
+    const GOOD_PASSWORD: &str = "correct horse battery staple";
+
+    fn claim(token: &str, username: &str, password: &str) -> Value {
+        serde_json::json!({"token": token, "username": username, "password": password})
+    }
+
+    #[tokio::test]
+    async fn setup_without_the_token_creates_no_account() {
+        let (addr, _token, state) = serve_setup().await;
+        let wrong = claim("00000000000000000000000000000000", "admin", GOOD_PASSWORD);
+        let (status, body) = post_json(&addr, "/api/setup", &wrong).await;
+        assert_eq!(status, 403, "{body}");
+        let missing = serde_json::json!({"username": "admin", "password": GOOD_PASSWORD});
+        assert_eq!(post_json(&addr, "/api/setup", &missing).await.0, 422);
+        assert_eq!(state.db.account_count().await.unwrap(), 0);
+        // Setup stays open.
+        assert_eq!(get(&addr, "/api/setup").await.0, 200);
+    }
+
+    #[tokio::test]
+    async fn a_weak_password_or_a_bad_name_creates_no_account() {
+        let (addr, token, state) = serve_setup().await;
+        let short = post_json(&addr, "/api/setup", &claim(&token, "admin", "too short")).await;
+        assert_eq!(short.0, 422);
+        assert!(short.1.contains("at least 15"), "{}", short.1);
+        let common = post_json(
+            &addr,
+            "/api/setup",
+            &claim(&token, "admin", "1q2w3e4r5t6y7u8i"),
+        )
+        .await;
+        assert_eq!(common.0, 422);
+        let bad = post_json(
+            &addr,
+            "/api/setup",
+            &claim(&token, "bad name", GOOD_PASSWORD),
+        )
+        .await;
+        assert_eq!(bad.0, 422);
+        assert_eq!(state.db.account_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_first_claim_creates_the_account_and_closes_setup() {
+        let (addr, token, state) = serve_setup().await;
+        assert_eq!(get(&addr, "/api/setup").await.0, 200);
+        let (status, body) =
+            post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        assert_eq!(status, 201, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["username"],
+            "admin"
+        );
+        assert_eq!(state.db.account_count().await.unwrap(), 1);
+        // The token is used up, and setup is gone.
+        assert_eq!(get(&addr, "/api/setup").await.0, 404);
+        let again = post_json(&addr, "/api/setup", &claim(&token, "second", GOOD_PASSWORD)).await;
+        assert_eq!(again.0, 404);
+        assert_eq!(state.db.account_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_claims_create_exactly_one_account() {
+        let (addr, token, state) = serve_setup().await;
+        let claims = (0..8).map(|n| {
+            let addr = addr.clone();
+            let body = claim(&token, &format!("admin{n}"), GOOD_PASSWORD);
+            tokio::spawn(async move { post_json(&addr, "/api/setup", &body).await.0 })
+        });
+        let mut statuses = Vec::new();
+        for c in claims {
+            statuses.push(c.await.unwrap());
+        }
+        statuses.sort_unstable();
+        assert_eq!(
+            statuses.iter().filter(|s| **s == 201).count(),
+            1,
+            "{statuses:?}"
+        );
+        assert!(
+            statuses.iter().all(|s| *s == 201 || *s == 404),
+            "{statuses:?}"
+        );
+        assert_eq!(state.db.account_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_expired_token_fails() {
+        let (addr, _, state) = serve_setup().await;
+        let past = std::time::Instant::now()
+            .checked_sub(crate::setup::TOKEN_LIFETIME + std::time::Duration::from_secs(1))
+            .unwrap();
+        let (text, token) = crate::setup::SetupToken::generate(past).unwrap();
+        *state.setup.lock().unwrap() = Some(token);
+        let (status, body) =
+            post_json(&addr, "/api/setup", &claim(&text, "admin", GOOD_PASSWORD)).await;
+        assert_eq!(status, 403);
+        assert!(body.contains("expired"), "{body}");
+        assert_eq!(get(&addr, "/api/setup").await.0, 404);
+        assert_eq!(state.db.account_count().await.unwrap(), 0);
     }
 
     /// A plain HTTP/1.1 GET. Returns the status code and the body.

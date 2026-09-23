@@ -85,6 +85,44 @@ impl Db {
         }
     }
 
+    /// The number of accounts. Setup is open only while it is 0.
+    pub async fn account_count(&self) -> Result<i64, String> {
+        self.conn
+            .call(|c| c.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0)))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Creates the first account, in one transaction that sees no other
+    /// account. Returns `false` when an account already exists, for example
+    /// because a parallel setup claim won.
+    pub async fn create_first_account(
+        &self,
+        username: String,
+        password_hash: String,
+    ) -> Result<bool, String> {
+        self.conn
+            .call(move |c| {
+                // IMMEDIATE takes the write lock at BEGIN, so the count and
+                // the insert see the same database.
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let count: i64 = tx.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?;
+                if count > 0 {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "INSERT INTO accounts (username, password_hash, created_at, password_changed_at)
+                     VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                             strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                    [&username, &password_hash],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
     /// Runs a trivial query, for the health check.
     pub async fn ping(&self) -> Result<(), String> {
         self.conn

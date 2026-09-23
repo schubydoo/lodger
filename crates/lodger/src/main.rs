@@ -7,6 +7,7 @@ mod config;
 mod console;
 mod db;
 mod server;
+mod setup;
 mod ws;
 
 use clap::Parser;

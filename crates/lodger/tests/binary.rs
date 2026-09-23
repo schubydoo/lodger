@@ -239,3 +239,95 @@ fn serve_reads_the_configuration_file() {
     assert!(state.join("lodger.db").exists());
     server.stop();
 }
+
+/// Starts `lodger serve` on `state` and returns the process, the address, and
+/// the setup token from the log, if one was written.
+fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
+    let mut child = lodger()
+        .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
+        .arg("--state-dir")
+        .arg(state)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lodger serve starts");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let addr = line
+        .trim()
+        .strip_prefix("lodger listening on http://")
+        .unwrap_or_else(|| panic!("unexpected first line: {line}"))
+        .to_string();
+    // The token line comes before the settings summary.
+    let mut token = None;
+    let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
+    for line in stderr.by_ref() {
+        let line = line.unwrap();
+        if let Some(rest) = line.strip_prefix("lodger: setup token: ") {
+            token = Some(rest.split_whitespace().next().unwrap().to_string());
+        }
+        if line.starts_with("lodger: libvirt ") {
+            break;
+        }
+    }
+    // Keep reading, as the journal does. A closed pipe would make the
+    // server's next log line fail.
+    std::thread::spawn(move || stderr.for_each(drop));
+    (child, addr, token)
+}
+
+fn post_setup(addr: &str, token: &str, username: &str) -> String {
+    let body = format!(
+        r#"{{"token":"{token}","username":"{username}","password":"correct horse battery staple"}}"#
+    );
+    let mut s = TcpStream::connect(addr).unwrap();
+    write!(
+        s,
+        "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn a_restart_before_the_first_account_writes_a_new_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+
+    let (child, _, first) = serve_on(&state);
+    let first = first.expect("the first start writes a setup token");
+    Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    }
+    .stop();
+
+    let (child, addr, second) = serve_on(&state);
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    let second = second.expect("a restart with no account writes a new token");
+    assert_ne!(first, second);
+    // The old token stopped working; the new one claims the install.
+    assert!(post_setup(&addr, &first, "admin").starts_with("HTTP/1.1 403"));
+    assert!(post_setup(&addr, &second, "admin").starts_with("HTTP/1.1 201"));
+    assert!(post_setup(&addr, &second, "other").starts_with("HTTP/1.1 404"));
+    server.stop();
+
+    // With an account, a start writes no token, and setup stays closed.
+    let (child, addr, third) = serve_on(&state);
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    assert_eq!(third, None);
+    assert!(http_get(&addr, "/api/setup").starts_with("HTTP/1.1 404"));
+    server.stop();
+}
