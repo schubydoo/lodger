@@ -18,6 +18,20 @@ export default defineConfig({
 			// embeds and serves as the fallback (see crates/lodger/src/assets.rs later).
 			adapter: adapter({ fallback: '200.html' })
 		}),
+		// SvelteKit names its output `__sveltekit_<build hash>.app`. ES modules
+		// ignore that name, but the Codecov plugin appends it to the bundle
+		// name, so each build would start a new bundle in Bundle Analysis.
+		// Removing it from ES output changes nothing in the build. SvelteKit's
+		// inline (iife) mode needs the name, so that mode keeps it.
+		{
+			name: 'lodger-stable-bundle-name',
+			outputOptions(options) {
+				if (options.format === 'es' || options.format === 'esm') {
+					return { ...options, name: undefined };
+				}
+				return null;
+			}
+		},
 		// Codecov Bundle Analysis. It must come after every other plugin. It
 		// uploads bundle sizes during `pnpm build`, and only on GitHub Actions,
 		// so a local build sends nothing. The repository is public, so GitHub
