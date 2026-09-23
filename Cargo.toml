@@ -27,6 +27,16 @@ codegen-units = 1
 strip = true
 panic = "unwind"
 
+# argon2 in an unoptimized build takes about 0.3 s per hash, and the tests
+# hash often, so most slow tests waited on it. Optimizing only the argon2
+# crates makes each hash about 17 times faster. Lodger's own code stays
+# unoptimized, for debugging and coverage.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
 # Lints ported from podspine. Every crate opts in with `[lints] workspace = true`.
 [workspace.lints.clippy]
 # Identifiers in doc comments must have backticks.
