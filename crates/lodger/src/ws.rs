@@ -13,16 +13,17 @@
 //! therefore delays only itself. When it falls more than the hub's capacity
 //! behind, it skips the old events and gets `resync`.
 
-use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::{HeaderMap, StatusCode, Uri, header};
-use axum::response::{IntoResponse, Response};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use lodger_virt::Event;
 use serde::Serialize;
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use crate::api::Connection;
+use crate::auth::{self, SocketQuery};
 use crate::server::AppState;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -47,36 +48,28 @@ pub enum Update {
 pub async fn events(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<SocketQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    upgrade.on_upgrade(move |socket| forward(socket, state))
-}
-
-/// Browsers apply no same-origin rule to WebSocket connections, so any page that the
-/// user opens could connect here. A browser always sends `Origin` on a
-/// WebSocket upgrade, so an upgrade with an `Origin` from another host is
-/// refused. A request without `Origin` does not come from a page, for
-/// example `websocat` on the host, and passes. Login comes in Task 2.3.
-pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return true;
+    let key = match auth::open_socket(&state, &headers, &query).await {
+        Ok(key) => key,
+        Err(response) => return *response,
     };
-    let origin_host = origin
-        .to_str()
-        .ok()
-        .and_then(|o| o.parse::<Uri>().ok())
-        .and_then(|uri| uri.authority().cloned());
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    match (origin_host, host) {
-        (Some(origin), Some(host)) => origin.as_str().eq_ignore_ascii_case(host),
-        _ => false,
-    }
+    upgrade.on_upgrade(move |socket| forward(socket, state, key))
 }
 
-async fn forward(mut socket: WebSocket, state: AppState) {
+/// The close message when the socket's session ends: code 1008, "policy
+/// violation", which tells the page not to count it as a network failure.
+pub(crate) fn session_over() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: close_code::POLICY,
+        reason: "the session ended".into(),
+    }))
+}
+
+async fn forward(mut socket: WebSocket, state: AppState, key: [u8; 32]) {
+    let ended = auth::session_ended(state.clone(), key);
+    tokio::pin!(ended);
     // Subscribe first, then mark the current values as seen, so the client
     // gets only what changes after it connects.
     let mut events = state.host.subscribe();
@@ -101,6 +94,10 @@ async fn forward(mut socket: WebSocket, state: AppState) {
             Ok(()) = reloads.changed() => Update::Resync,
             Ok(()) = conn.changed() => Update::Connection {
                 connection: conn.borrow_and_update().clone().into(),
+            },
+            () = &mut ended => {
+                let _ = socket.send(session_over()).await;
+                return;
             },
             incoming = socket.recv() => match incoming {
                 // The browser sends nothing. Ignore anything but a close.
@@ -154,44 +151,6 @@ mod tests {
         assert_eq!(update_for(Ok(Event::Closed { reason: 1 })), None);
         assert_eq!(update_for(Err(RecvError::Lagged(3))), Some(Update::Resync));
         assert_eq!(update_for(Err(RecvError::Closed)), None);
-    }
-
-    fn headers(pairs: &[(&'static str, &str)]) -> axum::http::HeaderMap {
-        pairs
-            .iter()
-            .map(|(k, v)| (axum::http::HeaderName::from_static(k), v.parse().unwrap()))
-            .collect()
-    }
-
-    #[test]
-    fn only_a_page_from_this_server_may_connect() {
-        use super::same_origin;
-        let host = ("host", "127.0.0.1:8460");
-        assert!(same_origin(&headers(&[
-            host,
-            ("origin", "http://127.0.0.1:8460")
-        ])));
-        assert!(same_origin(&headers(&[
-            host,
-            ("origin", "HTTP://127.0.0.1:8460")
-        ])));
-        assert!(
-            same_origin(&headers(&[host])),
-            "no Origin: not a browser page"
-        );
-        assert!(!same_origin(&headers(&[
-            host,
-            ("origin", "http://evil.example")
-        ])));
-        assert!(!same_origin(&headers(&[
-            host,
-            ("origin", "http://127.0.0.1:9999")
-        ])));
-        assert!(!same_origin(&headers(&[host, ("origin", "null")])));
-        assert!(!same_origin(&headers(&[(
-            "origin",
-            "http://127.0.0.1:8460"
-        )])));
     }
 
     #[test]

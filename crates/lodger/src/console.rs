@@ -6,19 +6,20 @@
 //! both ways. When either side closes, the relay drops both, and the socket
 //! to QEMU closes with it.
 //!
-//! Login protection comes in Task 2.5. Until then the Origin check keeps
-//! other web pages out, as on `/ws/events`.
+//! The upgrade needs a Lodger page, a live session, and a ticket
+//! (`auth::open_socket`). When the session ends, the relay closes both
+//! sockets within 5 seconds.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
 
+use crate::auth::{self, SocketQuery};
 use crate::server::AppState;
-use crate::ws::same_origin;
 
 /// The largest chunk read from QEMU at once.
 const CHUNK: usize = 64 * 1024;
@@ -27,11 +28,13 @@ pub async fn vnc(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    Query(query): Query<SocketQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+    let key = match auth::open_socket(&state, &headers, &query).await {
+        Ok(key) => key,
+        Err(response) => return *response,
+    };
     let Some(virt) = state.host.virt() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "libvirt is not connected").into_response();
     };
@@ -51,14 +54,15 @@ pub async fn vnc(
     // noVNC may ask for the "binary" subprotocol.
     upgrade
         .protocols(["binary"])
-        .on_upgrade(move |ws| relay(ws, socket))
+        .on_upgrade(move |ws| relay(ws, socket, auth::session_ended(state, key)))
 }
 
 /// Copies bytes between the WebSocket and the VNC socket until one side
-/// closes, then drops both.
-pub(crate) async fn relay<S>(ws: WebSocket, socket: S)
+/// closes or `ended` returns, then drops both.
+pub(crate) async fn relay<S, E>(ws: WebSocket, socket: S, ended: E)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
+    E: Future<Output = ()>,
 {
     let (mut from_vm, mut to_vm) = tokio::io::split(socket);
     let (mut to_browser, mut from_browser) = ws.split();
@@ -93,9 +97,13 @@ where
         // The VM side ended: tell the browser.
         let _ = to_browser.send(Message::Close(None)).await;
     };
-    tokio::select! {
-        () = browser_to_vm => {}
-        () = vm_to_browser => {}
+    let session_over = tokio::select! {
+        () = browser_to_vm => false,
+        () = vm_to_browser => false,
+        () = ended => true,
+    };
+    if session_over {
+        let _ = to_browser.send(crate::ws::session_over()).await;
     }
 }
 
@@ -121,7 +129,7 @@ mod tests {
             "/relay",
             get(move |upgrade: WebSocketUpgrade| {
                 let vm = vm.lock().unwrap().take().expect("one client only");
-                async move { upgrade.on_upgrade(move |ws| relay(ws, vm)) }
+                async move { upgrade.on_upgrade(move |ws| relay(ws, vm, std::future::pending())) }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -195,6 +203,43 @@ mod tests {
         })
         .await;
         assert!(end.is_ok(), "the WebSocket stayed open");
+    }
+
+    #[tokio::test]
+    async fn the_end_of_the_session_closes_both_sides() {
+        let (vm, mut peer) = UnixStream::pair().unwrap();
+        let vm = Arc::new(Mutex::new(Some(vm)));
+        let app = Router::new().route(
+            "/relay",
+            get(move |upgrade: WebSocketUpgrade| {
+                let vm = vm.lock().unwrap().take().expect("one client only");
+                // The session "ends" 100 ms after the upgrade.
+                let ended = tokio::time::sleep(Duration::from_millis(100));
+                async move { upgrade.on_upgrade(move |ws| relay(ws, vm, ended)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/relay"))
+            .await
+            .unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(Ok(Message::Close(frame))) = ws.next().await {
+                    return frame;
+                }
+            }
+        })
+        .await
+        .expect("the browser side stayed open");
+        assert_eq!(u16::from(frame.unwrap().code), 1008);
+        let mut buf = [0; 16];
+        let n = tokio::time::timeout(Duration::from_secs(5), peer.read(&mut buf))
+            .await
+            .expect("the relay kept the VM socket open")
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]

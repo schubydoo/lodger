@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
 use crate::throttle::Throttle;
+use crate::tickets::Tickets;
 use crate::{api, auth, console, security, ws};
 
 /// What every handler can reach.
@@ -28,6 +29,8 @@ pub struct AppState {
     pub throttle: Arc<Throttle>,
     /// Proxies whose forwarded client address Lodger believes (TAD 7.5).
     pub trusted_proxies: Arc<Vec<IpNet>>,
+    /// Single-use WebSocket tickets.
+    pub tickets: Arc<Tickets>,
     /// The origin of `public_url`, for the Origin check (TAD 7.4).
     pub public_origin: Option<Arc<str>>,
     /// The Content-Security-Policy for every response.
@@ -53,6 +56,7 @@ impl AppState {
             db,
             setup: Arc::new(std::sync::Mutex::new(setup)),
             throttle: Arc::default(),
+            tickets: Arc::default(),
             trusted_proxies: Arc::new(trusted_proxies),
         }
     }
@@ -63,8 +67,9 @@ impl AppState {
 ///
 /// Every API route needs a live session (TAD 7.2), except health, setup,
 /// and login. New routes go into `protected`, so the guard is the default.
-/// The guard also checks `X-CSRF-Token` on state-changing requests. The WebSocket
-/// routes get their session check in Task 2.5.
+/// The guard also checks `X-CSRF-Token` on state-changing requests. The
+/// WebSocket routes check the Origin, the session, and a ticket themselves
+/// (`auth::open_socket`), because an upgrade is a GET.
 ///
 /// Around everything: state-changing requests must come from a Lodger page, and
 /// every response gets the security headers (`security.rs`).
@@ -74,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
         .route("/api/session", get(auth::current).delete(auth::logout))
+        .route("/api/ws-tickets", post(auth::issue_ticket))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,
@@ -840,12 +846,70 @@ mod tests {
         assert_eq!(get(&addr, "/api").await.0, 404);
     }
 
+    type Ws = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+    type WsRequest = tokio_tungstenite::tungstenite::handshake::client::Request;
+
+    /// A ticket for `cookie`'s session, whose CSRF token is `csrf`, asked
+    /// for by a script that sends no `Origin`.
+    async fn ticket_for(addr: &str, cookie: &str, csrf: &str) -> String {
+        ticket_from(addr, cookie, csrf, None).await
+    }
+
+    /// [`ticket_for`], asked for by a page on `origin`.
+    async fn ticket_from(addr: &str, cookie: &str, csrf: &str, origin: Option<&str>) -> String {
+        let mut headers = vec![
+            format!("Cookie: {cookie}"),
+            SAME_ORIGIN.into(),
+            format!("X-CSRF-Token: {csrf}"),
+        ];
+        headers.extend(origin.map(|o| format!("Origin: {o}")));
+        let (status, out) = raw(addr, "POST", "/api/ws-tickets", &headers, "").await;
+        assert_eq!(status, 201, "{out}");
+        let body: Value = serde_json::from_str(&body_of(&out)).unwrap();
+        body["ticket"].as_str().unwrap().to_owned()
+    }
+
+    /// An upgrade request for `path` with `cookie` and `ticket` if given. It
+    /// sends no `Origin` and, like a browser, no `Sec-Fetch-Site`.
+    fn socket_request(
+        addr: &str,
+        path: &str,
+        cookie: Option<&str>,
+        ticket: Option<&str>,
+    ) -> WsRequest {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let query = ticket.map(|t| format!("?ticket={t}")).unwrap_or_default();
+        let mut req = format!("ws://{addr}{path}{query}")
+            .into_client_request()
+            .unwrap();
+        if let Some(cookie) = cookie {
+            req.headers_mut().insert("cookie", cookie.parse().unwrap());
+        }
+        req
+    }
+
+    /// Opens `path` with the server's test session and a fresh ticket.
+    async fn open_socket(addr: &str, path: &str) -> Ws {
+        let cookie = COOKIES.lock().unwrap().get(addr).cloned().unwrap();
+        let ticket = ticket_for(addr, &cookie, "csrf").await;
+        let req = socket_request(addr, path, Some(&cookie), Some(&ticket));
+        tokio_tungstenite::connect_async(req).await.unwrap().0
+    }
+
+    /// The HTTP status with which the server refuses `req`.
+    async fn refusal(req: WsRequest) -> u16 {
+        match tokio_tungstenite::connect_async(req).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => resp.status().as_u16(),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn a_lifecycle_event_reaches_a_websocket_client() {
         let (addr, _host) = serve().await;
-        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events"))
-            .await
-            .unwrap();
+        let mut ws = open_socket(&addr, "/ws/events").await;
 
         let outside = Virt::open(TEST_URI).await.unwrap();
         let name = "lodger-spike-ws-lifecycle";
@@ -884,52 +948,141 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_page_from_another_origin_cannot_open_the_socket() {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    async fn a_socket_needs_a_session_a_fresh_ticket_and_the_origin_that_asked() {
         let (addr, _host) = serve().await;
-        let mut req = format!("ws://{addr}/ws/events")
-            .into_client_request()
-            .unwrap();
-        req.headers_mut()
-            .insert("origin", "http://evil.example".parse().unwrap());
-        let err = tokio_tungstenite::connect_async(req).await.unwrap_err();
-        let tokio_tungstenite::tungstenite::Error::Http(resp) = err else {
-            panic!("expected an HTTP refusal, got {err:?}");
+        let cookie = COOKIES.lock().unwrap().get(&addr).cloned().unwrap();
+        let path = "/ws/events";
+        let page = "https://lodger.lan";
+        let with_origin = |ticket: &str, origin: &str| {
+            let mut req = socket_request(&addr, path, Some(&cookie), Some(ticket));
+            req.headers_mut().insert("origin", origin.parse().unwrap());
+            req
         };
-        assert_eq!(resp.status(), 403);
 
-        let mut req = format!("ws://{addr}/ws/events")
-            .into_client_request()
-            .unwrap();
-        req.headers_mut()
-            .insert("origin", format!("http://{addr}").parse().unwrap());
-        assert!(tokio_tungstenite::connect_async(req).await.is_ok());
+        // A page on another origin, and one that claims to be Host (which
+        // DNS rebinding can forge): 403.
+        let host_origin = format!("http://{addr}");
+        for origin in [
+            "http://evil.example",
+            "https://evil.lodger.lan",
+            &host_origin,
+        ] {
+            let ticket = ticket_from(&addr, &cookie, "csrf", Some(page)).await;
+            assert_eq!(refusal(with_origin(&ticket, origin)).await, 403, "{origin}");
+        }
+        // The page that asked for the ticket gets in, once.
+        let ticket = ticket_from(&addr, &cookie, "csrf", Some(page)).await;
+        assert!(
+            tokio_tungstenite::connect_async(with_origin(&ticket, page))
+                .await
+                .is_ok()
+        );
+        assert_eq!(refusal(with_origin(&ticket, page)).await, 403);
+
+        // No session: 401. No ticket, or a made-up one: 403.
+        let ticket = ticket_for(&addr, &cookie, "csrf").await;
+        assert_eq!(
+            refusal(socket_request(&addr, path, None, Some(&ticket))).await,
+            401
+        );
+        assert_eq!(
+            refusal(socket_request(&addr, path, Some(&cookie), None)).await,
+            403
+        );
+        let made_up = "0".repeat(64);
+        assert_eq!(
+            refusal(socket_request(&addr, path, Some(&cookie), Some(&made_up))).await,
+            403
+        );
+        // A 401 does not spend the ticket, and it still works once.
+        let ok = socket_request(&addr, path, Some(&cookie), Some(&ticket));
+        assert!(tokio_tungstenite::connect_async(ok).await.is_ok());
+        let again = socket_request(&addr, path, Some(&cookie), Some(&ticket));
+        assert_eq!(refusal(again).await, 403);
+    }
+
+    #[tokio::test]
+    async fn a_ticket_works_only_for_the_session_that_asked_for_it() {
+        let (addr, token, _state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let (_, alice, alice_body) = login(&addr, "admin", GOOD_PASSWORD).await;
+        let (_, bob, _) = login(&addr, "admin", GOOD_PASSWORD).await;
+        let alice_csrf: Value = serde_json::from_str(&alice_body).unwrap();
+        let ticket = ticket_for(
+            &addr,
+            alice.as_deref().unwrap(),
+            alice_csrf["csrf_token"].as_str().unwrap(),
+        )
+        .await;
+        let req = socket_request(&addr, "/ws/events", bob.as_deref(), Some(&ticket));
+        assert_eq!(refusal(req).await, 403);
+        // The failed try used the ticket up.
+        let req = socket_request(&addr, "/ws/events", alice.as_deref(), Some(&ticket));
+        assert_eq!(refusal(req).await, 403);
+    }
+
+    #[tokio::test]
+    async fn a_ticket_needs_a_session_and_its_csrf_token() {
+        let (addr, _host) = serve().await;
+        let cookie = COOKIES.lock().unwrap().get(&addr).cloned().unwrap();
+        let (status, _) = raw(&addr, "POST", "/api/ws-tickets", &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(status, 401);
+        let headers = [format!("Cookie: {cookie}"), SAME_ORIGIN.into()];
+        let (status, _) = raw(&addr, "POST", "/api/ws-tickets", &headers, "").await;
+        assert_eq!(status, 403);
+    }
+
+    #[tokio::test]
+    async fn logging_out_closes_the_session_sockets_within_5_seconds() {
+        let (addr, _host) = serve().await;
+        let cookie = COOKIES.lock().unwrap().get(&addr).cloned().unwrap();
+        let mut ws = open_socket(&addr, "/ws/events").await;
+        let headers = [
+            format!("Cookie: {cookie}"),
+            SAME_ORIGIN.into(),
+            "X-CSRF-Token: csrf".into(),
+        ];
+        let (status, _) = raw(&addr, "DELETE", "/api/session", &headers, "").await;
+        assert_eq!(status, 204);
+        let start = Instant::now();
+        // Events from the other tests, which share the test driver, may
+        // arrive before the close.
+        let close = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Close(frame))) => return frame,
+                    Some(Ok(_)) => {}
+                    other => panic!("the socket ended without a close: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("the socket stayed open for 5 seconds after the logout");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let frame = close.expect("a close frame with a reason");
+        assert_eq!(u16::from(frame.code), 1008);
+        assert_eq!(frame.reason.as_str(), "the session ended");
     }
 
     /// Opens `/ws/vms/{id}/vnc` and returns the HTTP status of a refusal.
-    async fn vnc_refusal(addr: &str, id: &str, origin: Option<&str>) -> u16 {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let mut req = format!("ws://{addr}/ws/vms/{id}/vnc")
-            .into_client_request()
-            .unwrap();
-        if let Some(origin) = origin {
-            req.headers_mut().insert("origin", origin.parse().unwrap());
-        }
-        match tokio_tungstenite::connect_async(req).await {
-            Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => resp.status().as_u16(),
-            other => panic!("expected a refusal, got {other:?}"),
-        }
+    async fn vnc_refusal(addr: &str, id: &str) -> u16 {
+        let cookie = COOKIES.lock().unwrap().get(addr).cloned().unwrap();
+        let ticket = ticket_for(addr, &cookie, "csrf").await;
+        let path = format!("/ws/vms/{id}/vnc");
+        refusal(socket_request(addr, &path, Some(&cookie), Some(&ticket))).await
     }
 
     #[tokio::test]
     async fn the_vnc_socket_refuses_what_it_cannot_open() {
         let (addr, host) = serve().await;
         let unknown = "00000000-0000-0000-0000-000000000000";
+        let cookie = COOKIES.lock().unwrap().get(&addr).cloned().unwrap();
+        let path = format!("/ws/vms/{unknown}/vnc");
         assert_eq!(
-            vnc_refusal(&addr, unknown, Some("http://evil.example")).await,
+            refusal(socket_request(&addr, &path, Some(&cookie), None)).await,
             403
         );
-        assert_eq!(vnc_refusal(&addr, unknown, None).await, 404);
+        assert_eq!(vnc_refusal(&addr, unknown).await, 404);
         // The test driver has no display to open, so libvirt refuses.
         let test = host
             .inventory()
@@ -937,7 +1090,7 @@ mod tests {
             .into_values()
             .find(|vm| vm.name == "test")
             .unwrap();
-        assert_eq!(vnc_refusal(&addr, &test.uuid.to_string(), None).await, 409);
+        assert_eq!(vnc_refusal(&addr, &test.uuid.to_string()).await, 409);
     }
 
     #[tokio::test]
@@ -946,16 +1099,14 @@ mod tests {
         let host = Arc::new(Host::start(&format!("test://{}", missing.display())).unwrap());
         let (addr, _host) = serve_host(host).await;
         let any = "00000000-0000-0000-0000-000000000000";
-        assert_eq!(vnc_refusal(&addr, any, None).await, 503);
+        assert_eq!(vnc_refusal(&addr, any).await, 503);
     }
 
     #[tokio::test]
     async fn the_server_ignores_client_text_and_ends_on_close() {
         use futures_util::SinkExt;
         let (addr, _host) = serve().await;
-        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events"))
-            .await
-            .unwrap();
+        let mut ws = open_socket(&addr, "/ws/events").await;
         ws.send(Message::Text("hello".into())).await.unwrap();
         ws.send(Message::Close(None)).await.unwrap();
         // The server answers the close and ends the stream. Events from the
@@ -980,9 +1131,7 @@ mod tests {
     async fn a_client_that_reads_nothing_does_not_block_the_server() {
         let driver = PrivateDriver::new("flood", &[]);
         let (addr, host) = serve_uri(&driver.uri()).await;
-        let (_stuck, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws/events"))
-            .await
-            .unwrap();
+        let _stuck = open_socket(&addr, "/ws/events").await;
         // A private driver gives each connection its own state, so the flood
         // runs on the host's read connection, the one with the callbacks.
         let virt = host.virt().unwrap();

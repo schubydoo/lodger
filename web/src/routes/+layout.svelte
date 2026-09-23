@@ -7,6 +7,7 @@
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
 	import { connectEvents, eventsUrl } from '$lib/events';
+	import { nextTicket, withTicket } from '$lib/session';
 
 	let { children } = $props();
 
@@ -21,7 +22,7 @@
 
 	onMount(() =>
 		connectEvents({
-			url: eventsUrl(window.location),
+			url: async () => withTicket(eventsUrl(window.location), await nextTicket()),
 			client,
 			onOpenChange: (open) => (socketOpen = open)
 		})

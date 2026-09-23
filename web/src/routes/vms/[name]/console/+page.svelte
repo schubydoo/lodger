@@ -5,6 +5,7 @@
 	import RFB from '@novnc/novnc';
 	import { fetchVms, keys } from '$lib/api';
 	import { statusText, vncUrl, type ConsoleStatus } from '$lib/console';
+	import { nextTicket, withTicket } from '$lib/session';
 
 	const name = $derived(page.params.name ?? '');
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
@@ -19,24 +20,36 @@
 	// as its memory, does not reconnect the console.
 	const target = $derived(vm?.state === 'running' ? vm.uuid : undefined);
 
-	// Connect once the VM is known to run. The socket closes when the page
-	// goes away, and the server then closes the display socket too.
+	// Connect once the VM is known to run, with a fresh ticket. The socket
+	// closes when the page goes away, and the server then closes the display
+	// socket too. The server also closes it when the session ends.
 	$effect(() => {
 		if (!screen || !target) return;
-		const client = new RFB(screen, vncUrl(window.location, target), {
-			wsProtocols: ['binary']
-		});
-		client.scaleViewport = true;
-		client.background = 'transparent';
-		client.addEventListener('connect', () => (status = 'connected'));
-		client.addEventListener('disconnect', (e) => {
-			status = (e as CustomEvent<{ clean: boolean }>).detail.clean ? 'closed' : 'failed';
-		});
+		const element = screen;
+		const url = vncUrl(window.location, target);
+		let client: RFB | undefined;
+		let gone = false;
 		status = 'connecting';
-		rfb = client;
+		nextTicket().then(
+			(ticket) => {
+				if (gone) return;
+				client = new RFB(element, withTicket(url, ticket), { wsProtocols: ['binary'] });
+				client.scaleViewport = true;
+				client.background = 'transparent';
+				client.addEventListener('connect', () => (status = 'connected'));
+				client.addEventListener('disconnect', (e) => {
+					status = (e as CustomEvent<{ clean: boolean }>).detail.clean ? 'closed' : 'failed';
+				});
+				rfb = client;
+			},
+			() => {
+				if (!gone) status = 'failed';
+			}
+		);
 		return () => {
+			gone = true;
 			rfb = undefined;
-			client.disconnect();
+			client?.disconnect();
 		};
 	});
 </script>
