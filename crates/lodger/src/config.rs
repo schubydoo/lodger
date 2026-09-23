@@ -42,7 +42,10 @@ pub struct Config {
     pub uri: String,
     /// Holds the database. systemd creates it as `StateDirectory=lodger`.
     pub state_dir: PathBuf,
-    /// The URL that browsers use, for the Origin and CSRF checks (Task 2.4).
+    /// The origin of the URL that browsers use, such as
+    /// `https://lodger.lan`, for the Origin check (TAD section 7.4). A browser
+    /// without `Sec-Fetch-Site` (Safari before 16.4, Firefox before 90) can
+    /// log in only when this is set.
     pub public_url: Option<String>,
     /// Proxies whose `X-Forwarded-For` Lodger trusts (TAD section 7.4).
     pub trusted_proxies: Vec<IpNet>,
@@ -107,7 +110,11 @@ impl Config {
                 .or(file.uri)
                 .unwrap_or_else(|| DEFAULT_URI.to_owned()),
             state_dir,
-            public_url: file.public_url,
+            public_url: file
+                .public_url
+                .as_deref()
+                .map(crate::security::origin_of)
+                .transpose()?,
             trusted_proxies: file.trusted_proxies,
         })
     }
@@ -209,6 +216,16 @@ mod tests {
         let f = file("[tls]\ncert = \"/c.pem\"\nkey = \"/k.pem\"");
         let err = Config::load(with_config(f.path().into()), None).unwrap_err();
         assert!(err.contains("tls"), "{err}");
+    }
+
+    #[test]
+    fn public_url_is_stored_as_its_origin_and_must_be_http() {
+        let f = file("public_url = \"https://Lodger.lan:443/\"");
+        let c = Config::load(with_config(f.path().into()), None).unwrap();
+        assert_eq!(c.public_url.as_deref(), Some("https://lodger.lan"));
+        let f = file("public_url = \"lodger.lan\"");
+        let err = Config::load(with_config(f.path().into()), None).unwrap_err();
+        assert!(err.contains("public_url"), "{err}");
     }
 
     #[test]

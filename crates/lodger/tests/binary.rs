@@ -310,7 +310,8 @@ fn post_setup(addr: &str, token: &str, username: &str) -> String {
     write!(
         s,
         "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+         Content-Type: application/json\r\nSec-Fetch-Site: same-origin\r\n\
+         Content-Length: {}\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
@@ -375,7 +376,8 @@ fn login(addr: &str, username: &str, password: &str) -> Option<String> {
     write!(
         s,
         "POST /api/session HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+         Content-Type: application/json\r\nSec-Fetch-Site: same-origin\r\n\
+         Content-Length: {}\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
