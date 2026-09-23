@@ -1,6 +1,7 @@
 //! The `lodger` binary: parse the command line and dispatch.
 
 mod accounts;
+mod admin;
 mod api;
 mod assets;
 mod auth;
@@ -23,6 +24,19 @@ fn main() {
     let cli = cli::Cli::parse();
     let result = match cli.command {
         cli::Command::Version => cli::version_line().map(|line| println!("{line}")),
+        cli::Command::Admin {
+            action,
+            config,
+            state_dir,
+        } => admin::run(
+            action,
+            config::Overrides {
+                config,
+                state_dir,
+                ..Default::default()
+            },
+        )
+        .map(|line| println!("{line}")),
         cli::Command::Serve {
             config,
             listen,

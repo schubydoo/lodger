@@ -41,8 +41,37 @@ pub enum Command {
         #[arg(long)]
         state_dir: Option<PathBuf>,
     },
+    /// Recover access without the web UI. Needs root.
+    ///
+    /// The new password comes from the terminal, or from one line of stdin
+    /// when stdin is not a terminal.
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+        /// Configuration file [default: /etc/lodger/config.toml, if it exists]
+        #[arg(long, global = true)]
+        config: Option<PathBuf>,
+        /// Directory of the database [default: `$STATE_DIRECTORY` from systemd,
+        /// or /var/lib/lodger]
+        #[arg(long, global = true)]
+        state_dir: Option<PathBuf>,
+    },
     /// Print the Lodger version and the libvirt client library version.
     Version,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AdminAction {
+    /// Set a new password for an account and end all of its sessions.
+    ResetPassword {
+        /// The account, compared without regard to case.
+        username: String,
+    },
+    /// Add an account with full rights.
+    Create {
+        /// The new account's name.
+        username: String,
+    },
 }
 
 /// The `version` output: `lodger <version> (libvirt client <x.y.z>)`.
@@ -109,6 +138,49 @@ mod tests {
         assert!(listen.ip().is_loopback());
         assert_eq!(listen.port(), 8460);
         assert_eq!(DEFAULT_URI, "qemu:///system");
+    }
+
+    #[test]
+    fn admin_takes_an_action_a_username_and_the_directory_flags() {
+        let cli = Cli::try_parse_from([
+            "lodger",
+            "admin",
+            "reset-password",
+            "alice",
+            "--state-dir",
+            "/tmp/s",
+        ])
+        .unwrap();
+        let Command::Admin {
+            action: AdminAction::ResetPassword { username },
+            config: None,
+            state_dir: Some(state_dir),
+        } = cli.command
+        else {
+            panic!("expected admin reset-password with --state-dir");
+        };
+        assert_eq!(username, "alice");
+        assert_eq!(state_dir.to_str(), Some("/tmp/s"));
+
+        let cli = Cli::try_parse_from(["lodger", "admin", "--config", "/c.toml", "create", "bob"])
+            .unwrap();
+        let Command::Admin {
+            action: AdminAction::Create { username },
+            config: Some(config),
+            state_dir: None,
+        } = cli.command
+        else {
+            panic!("expected admin create with --config");
+        };
+        assert_eq!(username, "bob");
+        assert_eq!(config.to_str(), Some("/c.toml"));
+    }
+
+    #[test]
+    fn admin_needs_an_action_and_a_username() {
+        assert!(Cli::try_parse_from(["lodger", "admin"]).is_err());
+        assert!(Cli::try_parse_from(["lodger", "admin", "create"]).is_err());
+        assert!(Cli::try_parse_from(["lodger", "admin", "reset-password"]).is_err());
     }
 
     #[test]
