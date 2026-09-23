@@ -329,7 +329,9 @@ impl Db {
     ) -> Result<Option<usize>, String> {
         self.conn
             .call(move |c| {
-                let tx = c.transaction()?;
+                // IMMEDIATE takes the write lock before the read, so a write by
+                // the running service cannot fail the upgrade with SQLITE_BUSY.
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
                 let id: Option<i64> = tx
                     .query_row(
                         "SELECT id FROM accounts WHERE username = ?1",
