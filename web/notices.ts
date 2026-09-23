@@ -12,7 +12,7 @@
 // The license check fails the build when a bundled package has no license or
 // one outside ALLOWED. Keep ALLOWED in step with about.toml and deny.toml.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import license, { type Dependency } from 'rollup-plugin-license';
 import type { Plugin } from 'vite';
 
@@ -89,21 +89,23 @@ export function notices(root: string): Plugin[] {
 					);
 				});
 			},
-			generateBundle() {
+			// Written to disk after the bundle, not emitted into it: Codecov
+			// Bundle Analysis reads the bundle, and a 240 kB text file that the
+			// browser loads only on request is not part of the app's size.
+			writeBundle(options) {
 				// SvelteKit builds the server part too; the notices belong to
 				// the client output, which the binary serves.
-				if (this.environment?.name !== 'client') return;
+				if (this.environment?.name !== 'client' || !options.dir) return;
 				const rustPart = rust();
 				if (rustPart === null) {
 					this.warn(
 						'web/notices/rust.txt is missing, so /third-party-notices.txt has no Rust crates. Run `just notices` first.'
 					);
 				}
-				this.emitFile({
-					type: 'asset',
-					fileName: 'third-party-notices.txt',
-					source: joinNotices(copied(), formatPackages(packages), rustPart)
-				});
+				writeFileSync(
+					`${options.dir}/third-party-notices.txt`,
+					joinNotices(copied(), formatPackages(packages), rustPart)
+				);
 			}
 		}
 	];
