@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use argon2::password_hash::PasswordHasher;
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::rejection::JsonRejection;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use lodger_core::validate::Name;
 use serde::{Deserialize, Serialize};
@@ -81,11 +82,21 @@ pub async fn status(State(state): State<AppState>) -> Response {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Claim {
     pub token: String,
     pub username: String,
     pub password: String,
+}
+
+/// Shows only the username: the token and the password must never reach a
+/// log line, not even through a `{claim:?}` added later.
+impl std::fmt::Debug for Claim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Claim")
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -98,9 +109,34 @@ fn error(code: StatusCode, message: impl Into<String>) -> Response {
 }
 
 /// `POST /api/setup`: creates the first account.
-pub async fn claim(State(state): State<AppState>, Json(claim): Json<Claim>) -> Response {
-    // 1. Setup must be open, and the token must match. Nothing else runs for
+///
+/// The body is read only after the Origin and the setup state are checked,
+/// so a closed setup answers 404 whatever the request carries.
+pub async fn claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<Claim>, JsonRejection>,
+) -> Response {
+    // 1. Only a page from this server may claim the install. Setup needs no
+    //    session, but it changes state (review rule 7). Task 2.4 adds the
+    //    general Origin and CSRF checks.
+    if !crate::ws::same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // 2. Setup must be open, and the token must match. Nothing else runs for
     //    a wrong token.
+    if state
+        .setup
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_none()
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let claim = match body {
+        Ok(Json(claim)) => claim,
+        Err(rejection) => return rejection.into_response(),
+    };
     {
         let setup = state
             .setup
@@ -120,7 +156,7 @@ pub async fn claim(State(state): State<AppState>, Json(claim): Json<Claim>) -> R
         }
     }
 
-    // 2. The account's own rules.
+    // 3. The account's own rules.
     let username = match Name::parse("username", &claim.username) {
         Ok(name) => name,
         Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
@@ -129,7 +165,7 @@ pub async fn claim(State(state): State<AppState>, Json(claim): Json<Claim>) -> R
         return error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string());
     }
 
-    // 3. argon2id takes about 19 MiB and tens of milliseconds: off the
+    // 4. argon2id takes about 19 MiB and tens of milliseconds: off the
     //    async threads.
     let password = claim.password;
     let hash = match tokio::task::spawn_blocking(move || hash_password(&password)).await {
@@ -150,7 +186,7 @@ pub async fn claim(State(state): State<AppState>, Json(claim): Json<Claim>) -> R
         }
     };
 
-    // 4. One transaction: only a database with no accounts takes the first.
+    // 5. One transaction: only a database with no accounts takes the first.
     let name = username.as_str().to_owned();
     let created = state.db.create_first_account(name.clone(), hash).await;
     match created {
@@ -215,6 +251,19 @@ mod tests {
         let (_, token) = SetupToken::generate(now).unwrap();
         assert_eq!(token.expires - now, TOKEN_LIFETIME);
         assert_eq!(TOKEN_LIFETIME, Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn a_claim_never_shows_its_secrets_in_debug_output() {
+        let claim = super::Claim {
+            token: "0123456789abcdef0123456789abcdef".into(),
+            username: "admin".into(),
+            password: "correct horse battery staple".into(),
+        };
+        let shown = format!("{claim:?}");
+        assert!(shown.contains("admin"), "{shown}");
+        assert!(!shown.contains("0123456789abcdef"), "{shown}");
+        assert!(!shown.contains("correct horse"), "{shown}");
     }
 
     #[test]

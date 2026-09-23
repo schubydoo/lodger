@@ -223,6 +223,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_refuses_a_page_from_another_origin() {
+        let (addr, token, state) = serve_setup().await;
+        let body = claim(&token, "admin", GOOD_PASSWORD).to_string();
+        let mut s = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let req = format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+             Origin: http://evil.example\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 403"), "{out}");
+        assert_eq!(state.db.account_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn closed_setup_answers_404_whatever_the_body() {
+        let (addr, _host) = serve().await;
+        assert_eq!(
+            post_json(&addr, "/api/setup", &serde_json::json!({}))
+                .await
+                .0,
+            404
+        );
+        // No body and no Content-Type at all.
+        let mut s = tokio::net::TcpStream::connect(&addr).await.unwrap();
+        let req = format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+             Content-Length: 0\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 404"), "{out}");
+    }
+
+    #[tokio::test]
     async fn a_weak_password_or_a_bad_name_creates_no_account() {
         let (addr, token, state) = serve_setup().await;
         let short = post_json(&addr, "/api/setup", &claim(&token, "admin", "too short")).await;
