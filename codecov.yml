@@ -60,6 +60,20 @@ flags:
 #
 # The web UI also leaves out the shadcn-svelte code copied from upstream and
 # the test helpers. web/vite.config.ts excludes the same paths from the lcov.
+# The web lcov is written from inside web/, so its paths start with src/.
+# Codecov maps them to web/src/ on its own today; this fix makes that mapping
+# explicit, so it does not depend on a guess. The Rust lcov has absolute
+# paths, which never start with src/.
+fixes:
+  - "src/::web/src/"
+
+# Bundle Analysis for the web app (the Codecov SvelteKit plugin in
+# web/vite.config.ts). Informational: a size change shows in the PR comment
+# and in a status that never fails.
+bundle_analysis:
+  warning_threshold: "5%"
+  status: "informational"
+
 ignore:
   - "crates/lodger/src/main.rs"
   - "crates/lodger-virt/src/events/ffi.rs"
