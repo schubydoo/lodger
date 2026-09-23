@@ -38,8 +38,11 @@ fn no_subcommand_is_a_usage_error() {
 fn serve_fails_cleanly_when_the_address_is_taken() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = taken.local_addr().unwrap();
+    let state = tempfile::tempdir().unwrap();
     let out = lodger()
         .args(["serve", "--listen", &addr.to_string(), "--uri", TEST_URI])
+        .arg("--state-dir")
+        .arg(state.path())
         .output()
         .expect("lodger runs");
     assert_eq!(out.status.code(), Some(1));
@@ -47,32 +50,67 @@ fn serve_fails_cleanly_when_the_address_is_taken() {
     assert!(stderr.contains("cannot serve on"), "stderr: {stderr}");
 }
 
+#[test]
+fn serve_fails_cleanly_when_the_state_directory_is_unusable() {
+    // /proc does not allow new directories, not even for root.
+    let out = lodger()
+        .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
+        .args(["--state-dir", "/proc/lodger-test"])
+        .output()
+        .expect("lodger runs");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("cannot create /proc/lodger-test"),
+        "stderr: {stderr}"
+    );
+}
+
 /// Stops the server when the test ends, even on a failed assertion. `stop` sends
 /// SIGTERM, like systemd does, and the server shuts down gracefully. SIGKILL is
-/// only the fallback: a killed process writes no coverage data.
-struct Server(Child);
+/// only the fallback: a killed process writes no coverage data. The server's
+/// temporary state directory goes away with it.
+struct Server {
+    child: Child,
+    state: tempfile::TempDir,
+}
 
 impl Server {
     fn stop(&mut self) -> std::process::ExitStatus {
-        let pid = self.0.id().to_string();
+        let pid = self.child.id().to_string();
         let sent = Command::new("kill").args(["-TERM", &pid]).status();
         assert!(sent.is_ok_and(|s| s.success()), "could not send SIGTERM");
-        self.0.wait().expect("lodger serve exits")
+        self.child.wait().expect("lodger serve exits")
+    }
+
+    /// The state directory: a directory that did not exist before the start.
+    fn state_dir(&self) -> std::path::PathBuf {
+        self.state.path().join("state")
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        if matches!(self.0.try_wait(), Ok(None)) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
 
 fn start() -> (Server, String) {
+    start_with(&[])
+}
+
+/// Starts `lodger serve` on the test driver, with a fresh state directory and
+/// `extra` arguments.
+fn start_with(extra: &[&str]) -> (Server, String) {
+    let state = tempfile::tempdir().unwrap();
     let mut child = lodger()
         .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
+        .arg("--state-dir")
+        .arg(state.path().join("state"))
+        .args(extra)
         .stdout(Stdio::piped())
         .spawn()
         .expect("lodger serve starts");
@@ -85,7 +123,7 @@ fn start() -> (Server, String) {
         .strip_prefix("lodger listening on http://")
         .unwrap_or_else(|| panic!("unexpected first line: {line}"))
         .to_string();
-    (Server(child), addr)
+    (Server { child, state }, addr)
 }
 
 fn http_get(addr: &str, path: &str) -> String {
@@ -143,4 +181,61 @@ fn serve_exits_cleanly_on_sigterm() {
     assert!(http_get(&addr, "/").starts_with("HTTP/1.1 200"));
     let status = server.stop();
     assert!(status.success(), "exit status after SIGTERM: {status:?}");
+}
+
+fn mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn a_fresh_start_creates_a_private_database() {
+    let (mut server, addr) = start();
+    assert!(http_get(&addr, "/").starts_with("HTTP/1.1 200"));
+    let dir = server.state_dir();
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&dir.join("lodger.db")), 0o600);
+    server.stop();
+}
+
+#[test]
+fn health_reports_the_database_and_libvirt() {
+    let (mut server, addr) = start();
+    let reply = http_get(&addr, "/api/health");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert!(reply.contains(r#""database":"ok""#), "{reply}");
+    server.stop();
+}
+
+#[test]
+fn serve_reads_the_configuration_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("from-config");
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "uri = \"{TEST_URI}\"\nstate_dir = \"{}\"\n",
+            state.display()
+        ),
+    )
+    .unwrap();
+    // --state-dir from start_with would override the file, so run by hand.
+    let mut child = lodger()
+        .args(["serve", "--listen", "127.0.0.1:0", "--config"])
+        .arg(&config)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("lodger serve starts");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    assert!(line.starts_with("lodger listening on "), "{line}");
+    assert!(state.join("lodger.db").exists());
+    server.stop();
 }

@@ -124,7 +124,10 @@ component_management:
         - crates/lodger/src/api.rs
         - crates/lodger/src/assets.rs
         - crates/lodger/src/cli.rs
+        - crates/lodger/src/config.rs
         - crates/lodger/src/console.rs
+        - crates/lodger/src/db/mod.rs
+        - crates/lodger/src/db/tests.rs
         - crates/lodger/src/server.rs
         - crates/lodger/src/ws.rs
     # The web UI selects its files by flag, not by path, so no path list needs

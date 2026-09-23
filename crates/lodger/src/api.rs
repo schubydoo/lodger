@@ -39,6 +39,34 @@ impl From<ConnState> for Connection {
     }
 }
 
+/// `GET /api/health`: for monitoring. It needs no login (TAD 4.3).
+#[derive(Debug, Serialize)]
+pub struct Health {
+    /// `ok`, `degraded` while libvirt is not connected, or `error` when the
+    /// database fails.
+    pub status: &'static str,
+    /// `ok`, or the database error.
+    pub database: String,
+    pub libvirt: Connection,
+}
+
+pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<Health>) {
+    let libvirt: Connection = state.host.state().into();
+    let (code, status, database) = match state.db.ping().await {
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, "error", e),
+        Ok(()) if libvirt.state == "connected" => (StatusCode::OK, "ok", "ok".into()),
+        Ok(()) => (StatusCode::OK, "degraded", "ok".into()),
+    };
+    (
+        code,
+        Json(Health {
+            status,
+            database,
+            libvirt,
+        }),
+    )
+}
+
 /// `GET /api/host`.
 #[derive(Debug, Serialize)]
 pub struct Host {
