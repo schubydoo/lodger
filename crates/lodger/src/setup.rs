@@ -14,7 +14,6 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use argon2::password_hash::PasswordHasher;
 use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
@@ -166,19 +165,19 @@ pub async fn claim(
     }
 
     // 4. argon2id takes about 19 MiB and tens of milliseconds: off the
-    //    async threads.
+    //    async threads, and only a few at once.
     let password = claim.password;
-    let hash = match tokio::task::spawn_blocking(move || hash_password(&password)).await {
-        Ok(Ok(hash)) => hash,
-        Ok(Err(e)) => {
+    let hash = match crate::passwords::run(move || crate::passwords::hash(&password)).await {
+        Some(Ok(hash)) => hash,
+        Some(Err(e)) => {
             eprintln!("lodger: setup: cannot hash the password: {e}");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "cannot hash the password",
             );
         }
-        Err(e) => {
-            eprintln!("lodger: setup: the hashing task failed: {e}");
+        None => {
+            eprintln!("lodger: setup: the hashing task failed");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "cannot hash the password",
@@ -210,20 +209,11 @@ pub async fn claim(
     }
 }
 
-/// Hashes a password with argon2id at the OWASP minimum parameters, which
-/// are the `argon2` defaults (TAD section 7.1).
-pub fn hash_password(password: &str) -> Result<String, String> {
-    argon2::Argon2::default()
-        .hash_password(password.as_bytes())
-        .map(|hash| hash.to_string())
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{SetupToken, TOKEN_LIFETIME, hash_password};
+    use super::{SetupToken, TOKEN_LIFETIME};
 
     #[test]
     fn a_token_is_128_random_bits_in_hex() {
@@ -264,16 +254,5 @@ mod tests {
         assert!(shown.contains("admin"), "{shown}");
         assert!(!shown.contains("0123456789abcdef"), "{shown}");
         assert!(!shown.contains("correct horse"), "{shown}");
-    }
-
-    #[test]
-    fn the_hash_is_argon2id_with_the_owasp_minimum() {
-        let hash = hash_password("correct horse battery staple").unwrap();
-        assert!(
-            hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
-            "{hash}"
-        );
-        // A fresh salt each time.
-        assert_ne!(hash, hash_password("correct horse battery staple").unwrap());
     }
 }

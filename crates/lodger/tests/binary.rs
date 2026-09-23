@@ -156,11 +156,21 @@ fn serve_answers_app_routes_and_reserves_api_and_ws() {
 
 #[test]
 fn serve_lists_the_test_driver_vms() {
-    let (mut server, addr) = start();
+    let dir = tempfile::tempdir().unwrap();
+    let (child, addr, token) = serve_on(&dir.path().join("state"));
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    assert!(post_setup(&addr, &token.unwrap(), "admin").starts_with("HTTP/1.1 201"));
+    // Without a session, the list is refused.
+    assert!(http_get(&addr, "/api/vms").starts_with("HTTP/1.1 401"));
+    let cookie = login(&addr, "admin", "correct horse battery staple").expect("the login works");
+
     // The supervisor connects in the background. Wait for the first load.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let body = loop {
-        let reply = http_get(&addr, "/api/vms");
+        let reply = http_get_with(&addr, "/api/vms", &cookie);
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         if reply.contains(r#""name":"test""#) {
             break reply;
@@ -240,9 +250,17 @@ fn serve_reads_the_configuration_file() {
     server.stop();
 }
 
+/// The server's log lines after the start, collected while it runs.
+type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
 /// Starts `lodger serve` on `state` and returns the process, the address, and
 /// the setup token from the log, if one was written.
 fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
+    let (child, addr, token, _) = serve_logged(state);
+    (child, addr, token)
+}
+
+fn serve_logged(state: &std::path::Path) -> (Child, String, Option<String>, Log) {
     let mut child = lodger()
         .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
         .arg("--state-dir")
@@ -274,8 +292,14 @@ fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
     }
     // Keep reading, as the journal does. A closed pipe would make the
     // server's next log line fail.
-    std::thread::spawn(move || stderr.for_each(drop));
-    (child, addr, token)
+    let log = Log::default();
+    let sink = std::sync::Arc::clone(&log);
+    std::thread::spawn(move || {
+        for line in stderr.map_while(Result::ok) {
+            sink.lock().unwrap().push(line);
+        }
+    });
+    (child, addr, token, log)
 }
 
 fn post_setup(addr: &str, token: &str, username: &str) -> String {
@@ -329,5 +353,70 @@ fn a_restart_before_the_first_account_writes_a_new_token() {
     };
     assert_eq!(third, None);
     assert!(http_get(&addr, "/api/setup").starts_with("HTTP/1.1 404"));
+    server.stop();
+}
+
+fn http_get_with(addr: &str, path: &str, cookie: &str) -> String {
+    let mut s = TcpStream::connect(addr).unwrap();
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nCookie: {cookie}\r\n\r\n"
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out
+}
+
+/// Logs in. Returns the session cookie, or `None` for a refused login.
+fn login(addr: &str, username: &str, password: &str) -> Option<String> {
+    let body = format!(r#"{{"username":"{username}","password":"{password}"}}"#);
+    let mut s = TcpStream::connect(addr).unwrap();
+    write!(
+        s,
+        "POST /api/session HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out.lines()
+        .find_map(|l| l.strip_prefix("set-cookie: "))
+        .and_then(|v| v.split(';').next())
+        .map(str::to_owned)
+}
+
+#[test]
+fn the_sixth_failed_login_waits_and_logs_a_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let (child, addr, token, log) = serve_logged(&dir.path().join("state"));
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    assert!(post_setup(&addr, &token.unwrap(), "admin").starts_with("HTTP/1.1 201"));
+    for _ in 0..5 {
+        assert_eq!(login(&addr, "admin", "wrong wrong wrong wrong"), None);
+    }
+    assert!(
+        !log.lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("WARNING: 5 failed logins"))
+    );
+    let start = std::time::Instant::now();
+    assert_eq!(login(&addr, "admin", "wrong wrong wrong wrong"), None);
+    assert!(
+        start.elapsed() >= std::time::Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+    let warned = log
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|l| l.contains(r#"WARNING: 5 failed logins in 15 minutes for account "admin""#));
+    assert!(warned, "{:?}", log.lock().unwrap());
     server.stop();
 }

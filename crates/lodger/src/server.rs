@@ -1,19 +1,23 @@
 //! The HTTP server: the API, the WebSocket, reserved prefixes, then the
 //! embedded web UI.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::middleware;
 use axum::response::Response;
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
+use ipnet::IpNet;
 use lodger_virt::Host;
 
 use crate::assets::{self, Embedded};
 use crate::config::Config;
 use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
-use crate::{api, console, ws};
+use crate::throttle::Throttle;
+use crate::{api, auth, console, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -21,17 +25,52 @@ pub struct AppState {
     pub host: Arc<Host>,
     pub db: Db,
     pub setup: Arc<Setup>,
+    pub throttle: Arc<Throttle>,
+    /// Proxies whose forwarded client address Lodger believes (TAD 7.5).
+    pub trusted_proxies: Arc<Vec<IpNet>>,
+}
+
+impl AppState {
+    pub fn new(
+        host: Arc<Host>,
+        db: Db,
+        setup: Option<SetupToken>,
+        trusted_proxies: Vec<IpNet>,
+    ) -> Self {
+        Self {
+            host,
+            db,
+            setup: Arc::new(std::sync::Mutex::new(setup)),
+            throttle: Arc::default(),
+            trusted_proxies: Arc::new(trusted_proxies),
+        }
+    }
 }
 
 /// Builds the router. Paths under `/api` and `/ws` without a handler answer
 /// 404, and they never fall through to the web UI.
+///
+/// Every API route needs a live session (TAD 7.2), except health, setup,
+/// and login. New routes go into `protected`, so the guard is the default.
+/// The WebSocket routes get their session check in Task 2.5.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/api/health", get(api::health))
-        .route("/api/setup", get(setup::status).post(setup::claim))
+    let protected = Router::new()
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
         .route("/api/vms/{id}", get(api::vm))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ));
+    Router::new()
+        .route("/api/health", get(api::health))
+        .route("/api/setup", get(setup::status).post(setup::claim))
+        // Login is public; GET and DELETE check the session themselves.
+        .route(
+            "/api/session",
+            post(auth::login).get(auth::current).delete(auth::logout),
+        )
+        .merge(protected)
         .route("/ws/events", get(ws::events))
         .route("/ws/vms/{id}/vnc", get(console::vnc))
         .route("/api", any(reserved))
@@ -56,13 +95,12 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
 /// disconnected. A database that cannot be opened does.
 pub async fn serve(config: Config) -> Result<(), String> {
     let db = Db::open(&config.state_dir).await?;
+    tokio::task::spawn_blocking(crate::passwords::prepare)
+        .await
+        .map_err(|e| format!("cannot prepare the password check: {e}"))?;
     let setup = open_setup(&db).await?;
     let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
-    let state = AppState {
-        host: Arc::new(host),
-        db,
-        setup: Arc::new(std::sync::Mutex::new(setup)),
-    };
+    let state = AppState::new(Arc::new(host), db, setup, config.trusted_proxies.clone());
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
@@ -74,17 +112,22 @@ pub async fn serve(config: Config) -> Result<(), String> {
     );
     eprintln!("{}", summary(&config));
     if !listen.ip().is_loopback() {
-        // TAD section 7.4: Lodger has no built-in TLS, and its API has no
-        // login yet (Task 2.3), so anyone who reaches the port controls it.
+        // TAD section 7.4: Lodger has no built-in TLS, so passwords and
+        // session cookies would cross the network in clear text. Browsers
+        // also keep the Secure session cookie only over HTTPS or loopback.
         eprintln!(
             "lodger: WARNING: listening on {listen}, which is not loopback. Put Lodger behind a \
              reverse proxy with TLS and listen on 127.0.0.1 instead."
         );
     }
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(fail)
+    // The TCP peer's address, which the login's client-IP rule needs.
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .map_err(fail)
 }
 
 /// Makes a setup token when no account exists and writes it to the log.
@@ -156,51 +199,134 @@ mod tests {
         serve_host(host).await
     }
 
-    /// Serves the router for `host` as it is, connected or not.
-    async fn serve_host(host: Arc<Host>) -> (String, Arc<Host>) {
+    /// The session cookie of each test server, by address. `get` and
+    /// `post_json` send it, so tests of protected routes run logged in.
+    static COOKIES: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::LazyLock::new(Default::default);
+
+    /// Serves `state` on a free local port, with the TCP peer address that
+    /// the login needs.
+    async fn start(state: AppState) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let app = router(AppState {
-            host: Arc::clone(&host),
-            db: crate::db::Db::in_memory().await,
-            setup: Arc::default(),
-        });
+        let app = router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, app).await });
+        addr
+    }
+
+    /// Creates an account and a session straight in the database, and
+    /// returns the session cookie.
+    async fn log_in_directly(state: &AppState) -> String {
+        use sha2::Digest;
+        assert!(
+            state
+                .db
+                .create_first_account("tester".into(), "not a real hash".into())
+                .await
+                .unwrap()
+        );
+        let account = state
+            .db
+            .find_account("tester".into())
+            .await
+            .unwrap()
+            .unwrap();
+        let token = "f".repeat(64);
+        state
+            .db
+            .create_session(crate::db::NewSession {
+                token_sha256: sha2::Sha256::digest(token.as_bytes()).into(),
+                account_id: account.id,
+                csrf_token: "csrf".into(),
+                client_ip: "127.0.0.1".into(),
+                user_agent: None,
+            })
+            .await
+            .unwrap();
+        format!("{}={token}", crate::auth::COOKIE)
+    }
+
+    /// Serves the router for `host` as it is, connected or not, logged in.
+    async fn serve_host(host: Arc<Host>) -> (String, Arc<Host>) {
+        let state = AppState::new(
+            Arc::clone(&host),
+            crate::db::Db::in_memory().await,
+            None,
+            vec![],
+        );
+        let cookie = log_in_directly(&state).await;
+        let addr = start(state).await;
+        COOKIES.lock().unwrap().insert(addr.clone(), cookie);
         (addr, host)
     }
 
-    /// Serves `test:///default` with setup open. Returns the address, the
-    /// token text, and the state.
+    /// Serves `test:///default` with setup open and no account. Returns the
+    /// address, the token text, and the state.
     async fn serve_setup() -> (String, String, AppState) {
         let host = Arc::new(Host::start(TEST_URI).unwrap());
         let (text, token) = crate::setup::SetupToken::generate(std::time::Instant::now()).unwrap();
-        let state = AppState {
-            host,
-            db: crate::db::Db::in_memory().await,
-            setup: Arc::new(std::sync::Mutex::new(Some(token))),
-        };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        let app = router(state.clone());
-        tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = AppState::new(host, crate::db::Db::in_memory().await, Some(token), vec![]);
+        let addr = start(state.clone()).await;
         (addr, text, state)
     }
 
-    /// A plain HTTP/1.1 POST with a JSON body. Returns the status and body.
-    async fn post_json(addr: &str, path: &str, body: &Value) -> (u16, String) {
-        let body = body.to_string();
+    /// One HTTP/1.1 request. Returns the status and the whole response.
+    async fn raw(
+        addr: &str,
+        method: &str,
+        path: &str,
+        headers: &[String],
+        body: &str,
+    ) -> (u16, String) {
         let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let req = format!(
-            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
-             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
+        let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n");
+        for h in headers {
+            req.push_str(h);
+            req.push_str("\r\n");
+        }
+        req.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
         s.write_all(req.as_bytes()).await.unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).await.unwrap();
-        let status = out[9..12].parse().unwrap();
-        let body = out.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
-        (status, body.to_string())
+        (out[9..12].parse().unwrap(), out)
+    }
+
+    fn body_of(response: &str) -> String {
+        response
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    fn cookie_for(addr: &str) -> Vec<String> {
+        COOKIES
+            .lock()
+            .unwrap()
+            .get(addr)
+            .map(|c| vec![format!("Cookie: {c}")])
+            .unwrap_or_default()
+    }
+
+    /// A GET with the server's test session, if it has one.
+    async fn get(addr: &str, path: &str) -> (u16, String) {
+        let (status, out) = raw(addr, "GET", path, &cookie_for(addr), "").await;
+        (status, body_of(&out))
+    }
+
+    /// A GET with the given cookie header, or none.
+    async fn get_as(addr: &str, path: &str, cookie: Option<&str>) -> u16 {
+        let headers: Vec<String> = cookie.map(|c| format!("Cookie: {c}")).into_iter().collect();
+        raw(addr, "GET", path, &headers, "").await.0
+    }
+
+    /// A POST with a JSON body and the server's test session, if any.
+    async fn post_json(addr: &str, path: &str, body: &Value) -> (u16, String) {
+        let mut headers = cookie_for(addr);
+        headers.push("Content-Type: application/json".into());
+        let (status, out) = raw(addr, "POST", path, &headers, &body.to_string()).await;
+        (status, body_of(&out))
     }
 
     const GOOD_PASSWORD: &str = "correct horse battery staple";
@@ -344,18 +470,6 @@ mod tests {
         assert_eq!(state.db.account_count().await.unwrap(), 0);
     }
 
-    /// A plain HTTP/1.1 GET. Returns the status code and the body.
-    async fn get(addr: &str, path: &str) -> (u16, String) {
-        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-        s.write_all(req.as_bytes()).await.unwrap();
-        let mut out = String::new();
-        s.read_to_string(&mut out).await.unwrap();
-        let status = out[9..12].parse().unwrap();
-        let body = out.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
-        (status, body.to_string())
-    }
-
     /// A test driver loaded from a file. It gives each connection a state
     /// of its own, so no other test can change what these tests compare.
     /// `Drop` removes the file, also after a failed assertion.
@@ -465,6 +579,155 @@ mod tests {
         // No error text: the endpoint needs no login.
         assert!(json["libvirt"] == "connecting" || json["libvirt"] == "disconnected");
         assert!(!body.contains("lodger-no-such-driver"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn protected_endpoints_answer_401_without_a_session() {
+        let (addr, host) = serve().await;
+        // The built-in domain: other tests add and remove their own.
+        let vm = host
+            .inventory()
+            .vms
+            .into_values()
+            .find(|vm| vm.name == "test")
+            .unwrap();
+        let forged = format!("{}={}", crate::auth::COOKIE, "0".repeat(64));
+        for path in [
+            "/api/host",
+            "/api/vms",
+            &format!("/api/vms/{}", vm.uuid),
+            "/api/session",
+        ] {
+            assert_eq!(get_as(&addr, path, None).await, 401, "{path}");
+            assert_eq!(get_as(&addr, path, Some(&forged)).await, 401, "{path}");
+            // The test session works.
+            assert_eq!(get(&addr, path).await.0, 200, "{path}");
+        }
+        // Open without a session: health, setup (closed here), and the app.
+        assert_eq!(get_as(&addr, "/api/health", None).await, 200);
+        assert_eq!(get_as(&addr, "/api/setup", None).await, 404);
+        assert_eq!(get_as(&addr, "/", None).await, 200);
+    }
+
+    /// Logs in through the API. Returns the status, the cookie, and the body.
+    async fn login(addr: &str, username: &str, password: &str) -> (u16, Option<String>, String) {
+        let body = serde_json::json!({"username": username, "password": password}).to_string();
+        let (status, out) = raw(
+            addr,
+            "POST",
+            "/api/session",
+            &["Content-Type: application/json".into()],
+            &body,
+        )
+        .await;
+        let cookie = out
+            .lines()
+            .find_map(|l| l.strip_prefix("set-cookie: "))
+            .and_then(|v| v.split(';').next())
+            .map(str::to_owned);
+        (status, cookie, body_of(&out))
+    }
+
+    #[tokio::test]
+    async fn login_then_logout_ends_the_session_everywhere() {
+        let (addr, token, _state) = serve_setup().await;
+        let created = post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        assert_eq!(created.0, 201);
+
+        let (status, cookie, body) = login(&addr, "ADMIN", GOOD_PASSWORD).await;
+        assert_eq!(status, 200, "{body}");
+        let cookie = cookie.expect("the login sets the cookie");
+        assert!(cookie.starts_with("__Host-lodger_sid="), "{cookie}");
+        let info: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(info["username"], "admin");
+        assert_eq!(info["csrf_token"].as_str().unwrap().len(), 64);
+
+        for path in ["/api/session", "/api/host", "/api/vms"] {
+            assert_eq!(get_as(&addr, path, Some(&cookie)).await, 200, "{path}");
+        }
+        let (status, out) = raw(
+            &addr,
+            "DELETE",
+            "/api/session",
+            &[format!("Cookie: {cookie}")],
+            "",
+        )
+        .await;
+        assert_eq!(status, 204);
+        assert!(out.to_lowercase().contains("max-age=0"), "{out}");
+        // The same cookie now fails on every endpoint at once.
+        for path in ["/api/session", "/api/host", "/api/vms"] {
+            assert_eq!(get_as(&addr, path, Some(&cookie)).await, 401, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_and_an_unknown_user_get_the_same_answer() {
+        let (addr, token, _state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let wrong = login(&addr, "admin", "correct horse battery stable").await;
+        let nobody = login(&addr, "nobody", GOOD_PASSWORD).await;
+        assert_eq!((wrong.0, nobody.0), (401, 401));
+        assert_eq!(wrong.2, nobody.2);
+        assert!(wrong.1.is_none() && nobody.1.is_none());
+    }
+
+    #[tokio::test]
+    async fn login_and_logout_refuse_a_page_from_another_origin() {
+        let (addr, token, _state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let body = serde_json::json!({"username": "admin", "password": GOOD_PASSWORD}).to_string();
+        let evil = "Origin: http://evil.example".to_string();
+        let (status, _) = raw(
+            &addr,
+            "POST",
+            "/api/session",
+            &["Content-Type: application/json".into(), evil.clone()],
+            &body,
+        )
+        .await;
+        assert_eq!(status, 403);
+        let (_, cookie, _) = login(&addr, "admin", GOOD_PASSWORD).await;
+        let cookie = cookie.unwrap();
+        let (status, _) = raw(
+            &addr,
+            "DELETE",
+            "/api/session",
+            &[format!("Cookie: {cookie}"), evil],
+            "",
+        )
+        .await;
+        assert_eq!(status, 403);
+        assert_eq!(get_as(&addr, "/api/session", Some(&cookie)).await, 200);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_sixth_failed_login_waits() {
+        let (addr, token, _state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let mut slowest = Duration::ZERO;
+        for _ in 0..5 {
+            let start = Instant::now();
+            assert_eq!(
+                login(&addr, "admin", "wrong wrong wrong wrong").await.0,
+                401
+            );
+            slowest = slowest.max(start.elapsed());
+        }
+        let start = Instant::now();
+        assert_eq!(
+            login(&addr, "admin", "wrong wrong wrong wrong").await.0,
+            401
+        );
+        let sixth = start.elapsed();
+        assert!(
+            sixth >= Duration::from_secs(1),
+            "the sixth attempt took {sixth:?}"
+        );
+        assert!(
+            sixth > slowest,
+            "sixth {sixth:?}, slowest before {slowest:?}"
+        );
     }
 
     #[tokio::test]

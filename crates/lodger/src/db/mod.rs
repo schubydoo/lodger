@@ -9,6 +9,7 @@ use std::fs::{DirBuilder, OpenOptions, Permissions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use rusqlite::OptionalExtension;
 use rusqlite_migration::{M, Migrations};
 
 /// The database file in the state directory.
@@ -17,6 +18,41 @@ pub const FILE: &str = "lodger.db";
 /// Every migration, in order. Never edit or remove a released one: add a new
 /// one instead. `user_version` counts how many have run.
 const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("migrations/0001_initial.sql"))];
+
+/// The current time as SQL, in the ISO 8601 form that the tables store.
+/// ISO 8601 strings in UTC compare in time order.
+const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+/// A session ends after 60 minutes without use (TAD 7.2).
+const IDLE_CUTOFF: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-60 minutes')";
+/// A session ends 24 hours after it started, whatever its use (TAD 7.2).
+const ABSOLUTE_HOURS: u32 = 24;
+
+/// An account row, for the login check.
+#[derive(Debug, Clone)]
+pub struct Account {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+}
+
+/// The data of a new session.
+#[derive(Debug, Clone)]
+pub struct NewSession {
+    pub token_sha256: [u8; 32],
+    pub account_id: i64,
+    pub csrf_token: String,
+    pub client_ip: String,
+    pub user_agent: Option<String>,
+}
+
+/// A live session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub account_id: i64,
+    pub username: String,
+    /// For the `X-CSRF-Token` check (Task 2.4).
+    pub csrf_token: String,
+}
 
 /// A handle to the database. Clone it freely; every clone uses the same
 /// connection.
@@ -121,6 +157,113 @@ impl Db {
             })
             .await
             .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// The account with this username, compared without regard to case.
+    pub async fn find_account(&self, username: String) -> Result<Option<Account>, String> {
+        self.conn
+            .call(move |c| {
+                c.query_row(
+                    "SELECT id, username, password_hash FROM accounts WHERE username = ?1",
+                    [&username],
+                    |r| {
+                        Ok(Account {
+                            id: r.get(0)?,
+                            username: r.get(1)?,
+                            password_hash: r.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+            })
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Stores a new session. The token itself never reaches the database:
+    /// only its SHA-256. It ends 24 hours after its start at the latest.
+    pub async fn create_session(&self, new: NewSession) -> Result<(), String> {
+        self.conn
+            .call(move |c| {
+                // A login is a good moment to drop sessions that ended.
+                c.execute(
+                    &format!(
+                        "DELETE FROM sessions WHERE expires_at <= {NOW} OR last_seen_at <= {IDLE_CUTOFF}"
+                    ),
+                    [],
+                )?;
+                c.execute(
+                    &format!(
+                        "INSERT INTO sessions (token_sha256, account_id, csrf_token, created_at,
+                             last_seen_at, expires_at, client_ip, user_agent)
+                         VALUES (?1, ?2, ?3, {NOW}, {NOW},
+                                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+{ABSOLUTE_HOURS} hours'), ?4, ?5)"
+                    ),
+                    rusqlite::params![
+                        new.token_sha256.as_slice(),
+                        new.account_id,
+                        new.csrf_token,
+                        new.client_ip,
+                        new.user_agent
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// The live session with this token hash, or `None`. A live session is
+    /// younger than 24 hours and was used in the last 60 minutes (TAD 7.2).
+    /// Using it counts as activity, recorded at most once a minute.
+    pub async fn session(&self, token_sha256: [u8; 32]) -> Result<Option<Session>, String> {
+        self.conn
+            .call(move |c| {
+                let found = c
+                    .query_row(
+                        &format!(
+                            "SELECT s.account_id, a.username, s.csrf_token
+                             FROM sessions s JOIN accounts a ON a.id = s.account_id
+                             WHERE s.token_sha256 = ?1
+                               AND s.expires_at > {NOW} AND s.last_seen_at > {IDLE_CUTOFF}"
+                        ),
+                        [token_sha256.as_slice()],
+                        |r| {
+                            Ok(Session {
+                                account_id: r.get(0)?,
+                                username: r.get(1)?,
+                                csrf_token: r.get(2)?,
+                            })
+                        },
+                    )
+                    .optional()?;
+                if found.is_some() {
+                    c.execute(
+                        &format!(
+                            "UPDATE sessions SET last_seen_at = {NOW} WHERE token_sha256 = ?1
+                               AND last_seen_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minutes')"
+                        ),
+                        [token_sha256.as_slice()],
+                    )?;
+                }
+                Ok(found)
+            })
+            .await
+            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
+    }
+
+    /// Ends the session with this token hash, if it exists.
+    pub async fn delete_session(&self, token_sha256: [u8; 32]) -> Result<(), String> {
+        self.conn
+            .call(move |c| {
+                c.execute(
+                    "DELETE FROM sessions WHERE token_sha256 = ?1",
+                    [token_sha256.as_slice()],
+                )
+                .map(drop)
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Runs a trivial query, for the health check.
