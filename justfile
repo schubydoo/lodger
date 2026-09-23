@@ -20,7 +20,13 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
-# Build the web UI, then the release binary that embeds it
-build:
+# Needs cargo-about 0.9.2 with the `cli` feature. The web build joins this part
+# with the web and copied notices.
+# Generate the Rust part of /third-party-notices.txt
+notices:
+    cargo about generate about.hbs -o web/notices/rust.txt
+
+# Build the web UI with its notices, then the release binary that embeds it
+build: notices
     cd web && pnpm install --frozen-lockfile && pnpm run build
     cargo build --release -p lodger

@@ -18,5 +18,10 @@ pnpm run test      # vitest
 pnpm run build     # static build into build/, with the 200.html fallback
 ```
 
+The build writes `/third-party-notices.txt`. Its Rust section comes from
+`web/notices/rust.txt`, which `just notices` generates (it needs cargo-about).
+Run it first, or use `just build`, which does both. Without it, the build warns
+and the file has no Rust crates. `web/notices.ts` explains the parts.
+
 `pnpm-workspace.yaml` sets pnpm's supply-chain policy. Read its comments before you
 add an exception.
