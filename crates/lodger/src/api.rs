@@ -39,23 +39,29 @@ impl From<ConnState> for Connection {
     }
 }
 
-/// `GET /api/health`: for monitoring. It needs no login (TAD 4.3).
+/// `GET /api/health`: for monitoring. It needs no login (TAD 4.3), so it
+/// answers with fixed words only. Error details can name paths on the host;
+/// they go to the log.
 #[derive(Debug, Serialize)]
 pub struct Health {
     /// `ok`, `degraded` while libvirt is not connected, or `error` when the
     /// database fails.
     pub status: &'static str,
-    /// `ok`, or the database error.
-    pub database: String,
-    pub libvirt: Connection,
+    /// `ok` or `error`.
+    pub database: &'static str,
+    /// `connecting`, `connected`, or `disconnected`.
+    pub libvirt: &'static str,
 }
 
 pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<Health>) {
-    let libvirt: Connection = state.host.state().into();
+    let libvirt = Connection::from(state.host.state()).state;
     let (code, status, database) = match state.db.ping().await {
-        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, "error", e),
-        Ok(()) if libvirt.state == "connected" => (StatusCode::OK, "ok", "ok".into()),
-        Ok(()) => (StatusCode::OK, "degraded", "ok".into()),
+        Err(e) => {
+            eprintln!("lodger: health check: the database failed: {e}");
+            (StatusCode::SERVICE_UNAVAILABLE, "error", "error")
+        }
+        Ok(()) if libvirt == "connected" => (StatusCode::OK, "ok", "ok"),
+        Ok(()) => (StatusCode::OK, "degraded", "ok"),
     };
     (
         code,

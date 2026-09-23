@@ -61,6 +61,17 @@ async fn an_existing_database_gets_mode_0600_again() {
 }
 
 #[tokio::test]
+async fn an_existing_state_directory_gets_mode_0700() {
+    // As systemd creates StateDirectory= by default.
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Db::open(&state).await.unwrap();
+    assert_eq!(mode(&state), 0o700);
+}
+
+#[tokio::test]
 async fn migrations_run_once_and_a_second_run_changes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let first = Db::open(tmp.path()).await.unwrap();

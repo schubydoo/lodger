@@ -65,10 +65,24 @@ impl Config {
     /// `--state-dir`, the file, systemd's `STATE_DIRECTORY`, or the default,
     /// in that order.
     pub fn load(overrides: Overrides, state_directory_env: Option<&str>) -> Result<Self, String> {
+        Self::load_with_default(overrides, state_directory_env, Path::new(DEFAULT_CONFIG))
+    }
+
+    fn load_with_default(
+        overrides: Overrides,
+        state_directory_env: Option<&str>,
+        default_config: &Path,
+    ) -> Result<Self, String> {
         let file = match &overrides.config {
             Some(path) => read(path)?,
-            None if Path::new(DEFAULT_CONFIG).exists() => read(Path::new(DEFAULT_CONFIG))?,
-            None => File::default(),
+            // Only a missing default file means "use the defaults". Any
+            // other error, such as no permission to read /etc/lodger, stops
+            // the start: silently ignoring the file would drop its settings.
+            None => match std::fs::read_to_string(default_config) {
+                Ok(text) => parse(default_config, &text)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
+                Err(e) => return Err(format!("cannot read {}: {e}", default_config.display())),
+            },
         };
         let state_dir = overrides
             .state_dir
@@ -102,7 +116,11 @@ impl Config {
 fn read(path: &Path) -> Result<File, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    parse(path, &text)
+}
+
+fn parse(path: &Path, text: &str) -> Result<File, String> {
+    toml::from_str(text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -197,6 +215,42 @@ mod tests {
     fn a_bad_proxy_network_is_an_error() {
         let f = file("trusted_proxies = [\"not-a-net\"]");
         assert!(Config::load(with_config(f.path().into()), None).is_err());
+    }
+
+    #[test]
+    fn a_missing_default_file_means_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let c =
+            Config::load_with_default(Overrides::default(), None, &dir.path().join("none.toml"))
+                .unwrap();
+        assert_eq!(c.uri, "qemu:///system");
+    }
+
+    #[test]
+    fn a_default_file_that_exists_is_read() {
+        let f = file("uri = \"test:///default\"");
+        let c = Config::load_with_default(Overrides::default(), None, f.path()).unwrap();
+        assert_eq!(c.uri, "test:///default");
+    }
+
+    #[test]
+    fn an_unreadable_default_file_is_an_error_not_the_defaults() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("config.toml"), "uri = \"test:///default\"").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // root reads through mode 0000, so the test proves nothing as root.
+        let is_root = std::fs::read_dir(&locked).is_ok();
+        let result =
+            Config::load_with_default(Overrides::default(), None, &locked.join("config.toml"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if is_root {
+            return;
+        }
+        let err = result.unwrap_err();
+        assert!(err.contains("Permission denied"), "{err}");
     }
 
     #[test]

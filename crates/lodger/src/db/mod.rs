@@ -104,15 +104,21 @@ impl Db {
     }
 }
 
-/// Creates the state directory with mode 0700 and the database file with
-/// mode 0600, before SQLite opens it, so the file is never readable by
-/// others, not even for a moment. An existing file gets mode 0600 again.
+/// Gives the state directory mode 0700 and the database file mode 0600,
+/// before SQLite opens it, so the file is never readable by others, not even
+/// for a moment. Both are created if they are missing, and both get their
+/// mode again if they exist.
 fn prepare_files(state_dir: &Path, path: &Path) -> Result<(), String> {
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(state_dir)
         .map_err(|e| format!("cannot create {}: {e}", state_dir.display()))?;
+    // DirBuilder sets the mode only on a directory that it creates. systemd
+    // creates `StateDirectory=` itself, with mode 0755 unless the unit says
+    // otherwise, so set 0700 every time.
+    std::fs::set_permissions(state_dir, Permissions::from_mode(0o700))
+        .map_err(|e| format!("cannot set the mode of {}: {e}", state_dir.display()))?;
     match OpenOptions::new()
         .write(true)
         .create_new(true)

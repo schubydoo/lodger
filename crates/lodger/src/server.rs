@@ -249,6 +249,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_answers_with_fixed_words() {
+        let (addr, _host) = serve().await;
+        let (status, body) = get(&addr, "/api/health").await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            serde_json::json!({"status": "ok", "database": "ok", "libvirt": "connected"})
+        );
+    }
+
+    #[tokio::test]
+    async fn health_is_degraded_while_libvirt_is_down() {
+        let missing = std::env::temp_dir().join("lodger-no-such-driver.xml");
+        let host = Arc::new(Host::start(&format!("test://{}", missing.display())).unwrap());
+        let (addr, _host) = serve_host(host).await;
+        let (status, body) = get(&addr, "/api/health").await;
+        assert_eq!(status, 200);
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["status"], "degraded");
+        // No error text: the endpoint needs no login.
+        assert!(json["libvirt"] == "connecting" || json["libvirt"] == "disconnected");
+        assert!(!body.contains("lodger-no-such-driver"), "{body}");
+    }
+
+    #[tokio::test]
     async fn unknown_api_and_ws_paths_stay_404() {
         let (addr, _host) = serve().await;
         assert_eq!(get(&addr, "/api/missing").await.0, 404);
