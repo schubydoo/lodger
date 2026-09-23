@@ -87,10 +87,15 @@
 
 	// Delete an account: the first click asks, the second deletes.
 	let confirming = $state<number | null>(null);
+	let deleting = $state(false);
 	let deleteProblem = $state('');
 
 	async function deleteAccount(account: Account) {
+		// The button is disabled meanwhile. This return also stops a second
+		// click that arrives before the page updates.
+		if (deleting) return;
 		deleteProblem = '';
+		deleting = true;
 		try {
 			await send('DELETE', `/api/accounts/${account.id}`, { csrf: csrf() });
 			confirming = null;
@@ -103,6 +108,8 @@
 		} catch (e) {
 			confirming = null;
 			deleteProblem = failed(e);
+		} finally {
+			deleting = false;
 		}
 	}
 </script>
@@ -228,8 +235,13 @@
 					<Table.Cell class="text-right">
 						{#if confirming === account.id}
 							<span class="mr-2 text-sm">Delete {account.username}?</span>
-							<Button variant="destructive" size="sm" onclick={() => deleteAccount(account)}>
-								Yes, delete
+							<Button
+								variant="destructive"
+								size="sm"
+								disabled={deleting}
+								onclick={() => deleteAccount(account)}
+							>
+								{deleting ? 'Deleting…' : 'Yes, delete'}
 							</Button>
 							<Button variant="outline" size="sm" onclick={() => (confirming = null)}>Keep</Button>
 						{:else}

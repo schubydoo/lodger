@@ -62,4 +62,40 @@ describe('the setup page', () => {
 			'The password is on the list of the most common passwords. Choose another one.'
 		);
 	});
+
+	it('leaves setup when the account exists but the login fails', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (path: string) =>
+				path === '/api/setup'
+					? new Response(JSON.stringify({ username: 'admin' }), { status: 201 })
+					: new Response(JSON.stringify({ error: 'too many password attempts' }), { status: 429 })
+			)
+		);
+		const client = await fill('a good long passphrase');
+		// No session, and setup closed: the app shell sends the visitor to login.
+		await vi.waitFor(() => expect(client.getQueryData(keys.setup)).toBe(false));
+		expect(client.getQueryData(keys.session)).toBeUndefined();
+	});
+
+	it('leaves setup when someone else finished it first', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(null, { status: 404 }))
+		);
+		const client = await fill('a good long passphrase');
+		await vi.waitFor(() => expect(client.getQueryData(keys.setup)).toBe(false));
+	});
+
+	it('stays on setup after a wrong token', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(
+				async () => new Response(JSON.stringify({ error: 'wrong setup token' }), { status: 403 })
+			)
+		);
+		const client = await fill('a good long passphrase');
+		expect(await screen.findByRole('alert')).toHaveTextContent('Wrong setup token.');
+		expect(client.getQueryData(keys.setup)).toBeUndefined();
+	});
 });

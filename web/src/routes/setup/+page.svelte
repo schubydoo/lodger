@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { keys, problemText, send, type Session } from '$lib/api';
+	import { ApiError, keys, problemText, send, type Session } from '$lib/api';
 
 	const client = useQueryClient();
 
@@ -23,18 +23,25 @@
 			return;
 		}
 		busy = true;
+		// Once an account exists, setup is closed for good. Then the app
+		// shell must leave this page, even when the login below fails: to the
+		// app with a session, or else to the login page.
+		let closed = false;
 		try {
 			await send('POST', '/api/setup', { body: { token, username, password } });
+			closed = true;
 			const session = await send<Session>('POST', '/api/session', {
 				body: { username, password }
 			});
 			password = confirm = token = '';
-			client.setQueryData(keys.setup, false);
 			client.setQueryData(keys.session, session);
 		} catch (e) {
+			// 404: another tab or another operator finished setup first.
+			if (e instanceof ApiError && e.status === 404) closed = true;
 			problem = problemText(e);
 		} finally {
 			busy = false;
+			if (closed) client.setQueryData(keys.setup, false);
 		}
 	}
 </script>

@@ -148,4 +148,21 @@ describe('the account page', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Add the account' }));
 		await vi.waitFor(() => expect(client.getQueryData(keys.session)).toBeNull());
 	});
+
+	it('sends one delete, however often the button is clicked', async () => {
+		let finish: (r: Response) => void = () => {};
+		const { fetcher } = show(() => json(accounts));
+		fetcher.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+		const row = screen.getAllByRole('row')[2];
+		await fireEvent.click(within(row).getByRole('button', { name: 'Delete second' }));
+		await fireEvent.click(within(row).getByRole('button', { name: 'Yes, delete' }));
+		const busy = within(row).getByRole('button', { name: 'Deleting…' });
+		expect(busy).toBeDisabled();
+		await fireEvent.click(busy);
+		expect(fetcher.mock.calls.map(([p, i]) => `${i?.method} ${p}`)).toEqual([
+			'DELETE /api/accounts/2'
+		]);
+		finish(new Response(null, { status: 204 }));
+		await vi.waitFor(() => expect(within(row).queryByText('Deleting…')).not.toBeInTheDocument());
+	});
 });
