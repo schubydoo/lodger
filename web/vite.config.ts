@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 import { svelteTesting } from '@testing-library/svelte/vite';
+import { codecovSvelteKitPlugin } from '@codecov/sveltekit-plugin';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 
@@ -16,6 +17,16 @@ export default defineConfig({
 			// Single-page app: every unknown path gets 200.html, which the Rust server
 			// embeds and serves as the fallback (see crates/lodger/src/assets.rs later).
 			adapter: adapter({ fallback: '200.html' })
+		}),
+		// Codecov Bundle Analysis. It must come after every other plugin. It
+		// uploads bundle sizes during `pnpm build`, and only on GitHub Actions,
+		// so a local build sends nothing. The repository is public, so GitHub
+		// Actions needs no upload token (Codecov's tokenless upload).
+		codecovSvelteKitPlugin({
+			enableBundleAnalysis: process.env.GITHUB_ACTIONS === 'true',
+			bundleName: 'lodger-web',
+			gitService: 'github',
+			telemetry: false
 		})
 	],
 	// `pnpm dev` serves the UI with hot reload and sends API and WebSocket
