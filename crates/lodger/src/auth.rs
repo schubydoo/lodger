@@ -6,13 +6,17 @@
 //! - `GET /api/session` returns the logged-in user and the CSRF token.
 //! - `DELETE /api/session` ends the session.
 //!
+//! - `POST /api/ws-tickets` gives a single-use ticket for a WebSocket
+//!   upgrade. [`open_socket`] checks the upgrade, and [`session_ended`]
+//!   closes the socket within 5 seconds after its session ends.
+//!
 //! [`require_session`] guards every other API route: without a live session
 //! it answers 401 and runs nothing. On a request that is not GET or HEAD, it
 //! also needs the session's token in `X-CSRF-Token`, or it answers 403. A
 //! session ends after 60 minutes without use or 24 hours after its start.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, Request, State};
@@ -45,6 +49,9 @@ fn random_token() -> Result<String, String> {
     getrandom::fill(&mut bytes).map_err(|e| format!("cannot make a token: {e}"))?;
     Ok(hex::encode(bytes))
 }
+
+/// How often an open WebSocket checks that its session is still live.
+pub const SOCKET_SESSION_CHECK: Duration = Duration::from_secs(2);
 
 fn token_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
@@ -270,6 +277,86 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
         .headers_mut()
         .insert(header::SET_COOKIE, clear_cookie());
     response
+}
+
+/// The SHA-256 of the request's session token, which names its session.
+fn session_key(headers: &HeaderMap) -> Option<[u8; 32]> {
+    cookie_token(headers).map(|token| token_hash(&token))
+}
+
+#[derive(Debug, Serialize)]
+pub struct TicketInfo {
+    pub ticket: String,
+}
+
+/// `POST /api/ws-tickets`: a ticket for one WebSocket upgrade, for 30
+/// seconds. [`require_session`] checked the session and the CSRF token.
+pub async fn issue_ticket(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let key = session_key(&headers).expect("require_session found the cookie");
+    let origin = header_text(&headers, header::ORIGIN).map(str::to_owned);
+    match state.tickets.issue(key, origin, Instant::now()) {
+        Ok(Some(ticket)) => (StatusCode::CREATED, Json(TicketInfo { ticket })).into_response(),
+        Ok(None) => error(StatusCode::TOO_MANY_REQUESTS, "too many open tickets"),
+        Err(e) => {
+            eprintln!("lodger: ws ticket: {e}");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "cannot make a ticket")
+        }
+    }
+}
+
+/// The query of a WebSocket URL.
+#[derive(Debug, Deserialize)]
+pub struct SocketQuery {
+    pub ticket: Option<String>,
+}
+
+fn header_text(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
+    headers.get(name).and_then(|v| v.to_str().ok())
+}
+
+/// Checks a WebSocket upgrade (TAD 7.4) and returns its session key.
+///
+/// 1. The session must be live: 401.
+/// 2. The ticket must be live, unused, and from this session, and the
+///    upgrade's `Origin` must equal the `Origin` that asked for the ticket:
+///    403. A browser applies no same-origin rule to a WebSocket and sends no
+///    `Sec-Fetch-Site` on the upgrade, so this exact match keeps other pages
+///    out.
+pub async fn open_socket(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &SocketQuery,
+) -> Result<[u8; 32], Box<Response>> {
+    let key = match lookup(state, headers).await {
+        Ok(Some(_)) => session_key(headers).expect("lookup found the cookie"),
+        Ok(None) => return Err(Box::new(unauthorized())),
+        Err(()) => return Err(Box::new(lookup_failed())),
+    };
+    let ticket = query.ticket.as_deref().unwrap_or_default();
+    let origin = header_text(headers, header::ORIGIN);
+    if !state.tickets.redeem(ticket, key, origin, Instant::now()) {
+        return Err(Box::new(error(
+            StatusCode::FORBIDDEN,
+            "missing, used, or expired ticket, or a page from another origin",
+        )));
+    }
+    Ok(key)
+}
+
+/// Returns once the session `key` is no longer live: a logout, a timeout,
+/// or a database that fails. A socket stops when this returns.
+pub async fn session_ended(state: AppState, key: [u8; 32]) {
+    loop {
+        tokio::time::sleep(SOCKET_SESSION_CHECK).await;
+        match state.db.session_alive(key).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                eprintln!("lodger: socket session check: the database failed: {e}");
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

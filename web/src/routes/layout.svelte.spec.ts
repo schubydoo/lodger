@@ -16,6 +16,12 @@ class FakeSocket {
 	close() {}
 }
 
+// Each socket gets a ticket first. The ticket client has its own tests.
+vi.mock('$lib/session', async (actual) => ({
+	...(await actual<typeof import('$lib/session')>()),
+	nextTicket: vi.fn(async () => 'tk')
+}));
+
 const children = createRawSnippet(() => ({ render: () => '<p>page body</p>' }));
 
 beforeEach(() => {
@@ -43,14 +49,15 @@ describe('the layout', () => {
 		);
 	});
 
-	it('opens the events socket on the page origin', () => {
+	it('opens the events socket on the page origin, with a ticket', async () => {
 		render(Layout, { props: { children } });
-		expect(FakeSocket.all).toHaveLength(1);
-		expect(FakeSocket.all[0].url).toBe(`ws://${window.location.host}/ws/events`);
+		await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+		expect(FakeSocket.all[0].url).toBe(`ws://${window.location.host}/ws/events?ticket=tk`);
 	});
 
 	it('shows the banner when the events socket closes', async () => {
 		render(Layout, { props: { children } });
+		await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
 		FakeSocket.all[0].onclose?.();
 		expect(await screen.findByText('Lodger is not reachable')).toBeInTheDocument();
 	});

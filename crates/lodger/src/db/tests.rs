@@ -408,3 +408,28 @@ async fn logout_deletes_the_session_and_a_login_drops_ended_ones() {
         .unwrap();
     assert_eq!(rows, 1);
 }
+
+#[tokio::test]
+async fn an_open_socket_sees_the_session_end_without_keeping_it_alive() {
+    // Last used 59 minutes ago: live, and one minute from its idle end.
+    let (db, hash) = session_with(
+        "UPDATE sessions SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-59 minutes')",
+    )
+    .await;
+    assert!(db.session_alive(hash).await.unwrap());
+    assert!(!db.session_alive([8u8; 32]).await.unwrap());
+    // The check does not count as use, so last_seen_at stays 59 minutes old.
+    let age: f64 = db
+        .call(move |c| {
+            c.query_row(
+                "SELECT (julianday('now') - julianday(last_seen_at)) * 1440 FROM sessions",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(age > 58.0, "the check touched the session: {age} minutes");
+    db.delete_session(hash).await.unwrap();
+    assert!(!db.session_alive(hash).await.unwrap());
+}

@@ -49,7 +49,8 @@ export function retryDelay(attempt: number): number {
 }
 
 export interface EventSocketOptions {
-	url: string;
+	/** The URL for the next connection. Each one needs a fresh ticket. */
+	url: () => Promise<string>;
 	client: QueryClient;
 	/** Called with `true` when the socket opens and `false` when it closes. */
 	onOpenChange?: (open: boolean) => void;
@@ -72,8 +73,23 @@ export function connectEvents(options: EventSocketOptions): () => void {
 	let stopped = false;
 	let socket: WebSocket | null = null;
 
+	const retry = () => {
+		if (stopped) return;
+		setTimer(open, retryDelay(attempt));
+		attempt += 1;
+	};
+
 	const open = () => {
-		socket = create(options.url);
+		options.url().then(connect, () => {
+			// No ticket, for example after a logout: try again later.
+			options.onOpenChange?.(false);
+			retry();
+		});
+	};
+
+	const connect = (url: string) => {
+		if (stopped) return;
+		socket = create(url);
 		socket.onopen = () => {
 			void options.client.invalidateQueries();
 			attempt = 0;
@@ -93,9 +109,7 @@ export function connectEvents(options: EventSocketOptions): () => void {
 		};
 		socket.onclose = () => {
 			options.onOpenChange?.(false);
-			if (stopped) return;
-			setTimer(open, retryDelay(attempt));
-			attempt += 1;
+			retry();
 		};
 	};
 

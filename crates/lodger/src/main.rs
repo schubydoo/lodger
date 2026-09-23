@@ -13,6 +13,7 @@ mod security;
 mod server;
 mod setup;
 mod throttle;
+mod tickets;
 mod ws;
 
 use clap::Parser;

@@ -42,6 +42,13 @@ vi.mock('@novnc/novnc', () => ({
 	}
 }));
 
+// Each console socket gets a ticket first. The ticket client has its own tests.
+const ticket = vi.hoisted(() => ({ next: async (): Promise<string> => 'tk' }));
+vi.mock('$lib/session', async (actual) => ({
+	...(await actual<typeof import('$lib/session')>()),
+	nextTicket: () => ticket.next()
+}));
+
 const params = vi.hoisted(() => ({ name: 'alpha' }));
 vi.mock('$app/state', () => ({ page: { params } }));
 
@@ -52,14 +59,25 @@ function show(name: string, data: typeof vms | null = vms) {
 	return { client, ...render(QueryHarness, { props: { client, component: Page, props: {} } }) };
 }
 
-beforeEach(() => (rfb.instances = []));
+/** Shows `name` and waits until noVNC has its URL. */
+async function connected(name: string) {
+	const shown = show(name);
+	await vi.waitFor(() => expect(rfb.instances).toHaveLength(1));
+	return shown;
+}
+
+beforeEach(() => {
+	rfb.instances = [];
+	ticket.next = async () => 'tk';
+});
 afterEach(() => vi.clearAllMocks());
 
 describe('the console page', () => {
 	it('connects noVNC to the VM socket and reports the status', async () => {
-		show('alpha');
-		expect(rfb.instances).toHaveLength(1);
-		expect(rfb.instances[0].url).toBe(`ws://${window.location.host}/ws/vms/${vms[0].uuid}/vnc`);
+		await connected('alpha');
+		expect(rfb.instances[0].url).toBe(
+			`ws://${window.location.host}/ws/vms/${vms[0].uuid}/vnc?ticket=tk`
+		);
 		expect(screen.getByRole('status')).toHaveTextContent('Connecting');
 		const button = screen.getByRole('button', { name: 'Send Ctrl+Alt+Del' });
 		expect(button).toBeDisabled();
@@ -73,15 +91,14 @@ describe('the console page', () => {
 		expect(await screen.findByText(/could not connect or closed/)).toBeInTheDocument();
 	});
 
-	it('disconnects when the page goes away', () => {
-		const { unmount } = show('alpha');
+	it('disconnects when the page goes away', async () => {
+		const { unmount } = await connected('alpha');
 		unmount();
 		expect(rfb.instances[0].disconnected).toBe(true);
 	});
 
-	it('keeps the console when another field of the VM changes', () => {
-		const { client } = show('alpha');
-		expect(rfb.instances).toHaveLength(1);
+	it('keeps the console when another field of the VM changes', async () => {
+		const { client } = await connected('alpha');
 		// For example `virsh setmem`: the list refetches with new memory.
 		client.setQueryData(keys.vms, [{ ...vms[0], memory_kib: 8388608 }, vms[1]]);
 		flushSync();
@@ -89,8 +106,8 @@ describe('the console page', () => {
 		expect(rfb.instances[0].disconnected).toBe(false);
 	});
 
-	it('disconnects when the VM stops', () => {
-		const { client } = show('alpha');
+	it('disconnects when the VM stops', async () => {
+		const { client } = await connected('alpha');
 		client.setQueryData(keys.vms, [{ ...vms[0], state: 'shutoff' }, vms[1]]);
 		flushSync();
 		expect(rfb.instances[0].disconnected).toBe(true);
@@ -106,6 +123,25 @@ describe('the console page', () => {
 		expect(screen.getByText('Loading…')).toBeInTheDocument();
 		expect(await screen.findByRole('alert')).toHaveTextContent('/api/vms answered 503');
 		vi.unstubAllGlobals();
+	});
+
+	it('does not connect when the page goes away before the ticket comes', async () => {
+		let give: (t: string) => void = () => {};
+		ticket.next = () => new Promise((resolve) => (give = resolve));
+		const { unmount } = show('alpha');
+		unmount();
+		give('late');
+		await new Promise((resolve) => setTimeout(resolve));
+		expect(rfb.instances).toHaveLength(0);
+	});
+
+	it('reports a failure when no ticket comes', async () => {
+		ticket.next = async () => {
+			throw new Error('/api/ws-tickets answered 401');
+		};
+		show('alpha');
+		expect(await screen.findByText(/could not connect or closed/)).toBeInTheDocument();
+		expect(rfb.instances).toHaveLength(0);
 	});
 
 	it('does not connect to a VM that is not running', () => {

@@ -65,43 +65,49 @@ class FakeSocket {
 	}
 }
 
-function setup() {
+/** Lets the pending promises, such as the URL, settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve));
+
+async function setup(url: () => Promise<string> = async () => 'ws://test/ws/events?ticket=t') {
 	const sockets: FakeSocket[] = [];
+	const urls: string[] = [];
 	const timers: { fn: () => void; ms: number }[] = [];
 	const invalidateQueries = vi.fn(async () => {});
 	const opens: boolean[] = [];
 	const stop = connectEvents({
-		url: 'ws://test/ws/events',
+		url,
 		client: { invalidateQueries } as unknown as QueryClient,
 		onOpenChange: (open) => opens.push(open),
-		createSocket: () => {
+		createSocket: (u) => {
+			urls.push(u);
 			const s = new FakeSocket();
 			sockets.push(s);
 			return s as unknown as WebSocket;
 		},
 		setTimer: (fn, ms) => timers.push({ fn, ms })
 	});
-	return { sockets, timers, invalidateQueries, opens, stop };
+	await settle();
+	return { sockets, urls, timers, invalidateQueries, opens, stop };
 }
 
 describe('connectEvents', () => {
-	it('invalidates the queries that a message names', () => {
-		const t = setup();
+	it('invalidates the queries that a message names', async () => {
+		const t = await setup();
 		t.sockets[0].onopen?.();
 		t.sockets[0].receive(`{"type":"vm","id":"${id}"}`);
 		expect(t.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['vms'] });
 		expect(t.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['host'] });
 	});
 
-	it('invalidates every query on resync', () => {
-		const t = setup();
+	it('invalidates every query on resync', async () => {
+		const t = await setup();
 		t.sockets[0].onopen?.();
 		t.sockets[0].receive('{"type":"resync"}');
 		expect(t.invalidateQueries).toHaveBeenCalledWith();
 	});
 
-	it('refetches everything when the socket first opens', () => {
-		const t = setup();
+	it('refetches everything when the socket first opens', async () => {
+		const t = await setup();
 		expect(t.invalidateQueries).not.toHaveBeenCalled();
 		// The page fetched before the socket opened. A change in between
 		// sends no event, so the open itself must refetch.
@@ -109,8 +115,8 @@ describe('connectEvents', () => {
 		expect(t.invalidateQueries).toHaveBeenCalledWith();
 	});
 
-	it('reconnects after a close and then refetches everything', () => {
-		const t = setup();
+	it('reconnects after a close and then refetches everything', async () => {
+		const t = await setup();
 		t.sockets[0].onopen?.();
 		t.invalidateQueries.mockClear();
 
@@ -119,22 +125,51 @@ describe('connectEvents', () => {
 		expect(t.timers).toEqual([{ fn: expect.any(Function), ms: 1000 }]);
 
 		t.timers[0].fn();
+		await settle();
 		t.sockets[1].onopen?.();
 		expect(t.opens).toEqual([true, false, true]);
 		// Events may have been missed while the socket was closed.
 		expect(t.invalidateQueries).toHaveBeenCalledWith();
 	});
 
-	it('backs off while the server stays away', () => {
-		const t = setup();
+	it('backs off while the server stays away', async () => {
+		const t = await setup();
 		t.sockets[0].onclose?.();
 		t.timers[0].fn();
+		await settle();
 		t.sockets[1].onclose?.();
 		expect(t.timers.map((x) => x.ms)).toEqual([1000, 2000]);
 	});
 
-	it('stops reconnecting after stop()', () => {
-		const t = setup();
+	it('asks for a new URL, and so a new ticket, for each connection', async () => {
+		let n = 0;
+		const t = await setup(async () => `ws://test/ws/events?ticket=${++n}`);
+		t.sockets[0].onclose?.();
+		t.timers[0].fn();
+		await settle();
+		expect(t.urls).toEqual(['ws://test/ws/events?ticket=1', 'ws://test/ws/events?ticket=2']);
+	});
+
+	it('retries later when no ticket comes, as after a logout', async () => {
+		const t = await setup(async () => {
+			throw new Error('/api/ws-tickets answered 401');
+		});
+		expect(t.sockets).toEqual([]);
+		expect(t.opens).toEqual([false]);
+		expect(t.timers.map((x) => x.ms)).toEqual([1000]);
+	});
+
+	it('opens no socket when stop() comes before the ticket', async () => {
+		let give: (url: string) => void = () => {};
+		const t = await setup(() => new Promise((resolve) => (give = resolve)));
+		t.stop();
+		give('ws://test/ws/events?ticket=late');
+		await settle();
+		expect(t.sockets).toEqual([]);
+	});
+
+	it('stops reconnecting after stop()', async () => {
+		const t = await setup();
 		t.stop();
 		expect(t.sockets[0].closed).toBe(true);
 		expect(t.timers).toEqual([]);
