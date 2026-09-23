@@ -61,6 +61,9 @@ export function joinNotices(copied: string, packages: string, rust: string | nul
 /** The Vite plugins that check the licenses and emit the notices file. */
 export function notices(root: string): Plugin[] {
 	let packages: Dependency[] = [];
+	const rustFile = `${root}/notices/rust.txt`;
+	const rust = () => (existsSync(rustFile) ? readFileSync(rustFile, 'utf8') : null);
+	const copied = () => readFileSync(`${root}/notices/copied.txt`, 'utf8');
 	return [
 		license({
 			thirdParty: {
@@ -72,19 +75,34 @@ export function notices(root: string): Plugin[] {
 		}) as Plugin,
 		{
 			name: 'lodger-third-party-notices',
+			// `pnpm run dev` builds no bundle, so the dev server answers the
+			// footer link itself. The package list exists only in a build.
+			configureServer(server) {
+				server.middlewares.use('/third-party-notices.txt', (_req, res) => {
+					res.setHeader('content-type', 'text/plain; charset=utf-8');
+					res.end(
+						joinNotices(
+							copied(),
+							'Web UI packages\n===============\n\nListed only in a build (`pnpm run build`).\n',
+							rust()
+						)
+					);
+				});
+			},
 			generateBundle() {
 				// SvelteKit builds the server part too; the notices belong to
 				// the client output, which the binary serves.
 				if (this.environment?.name !== 'client') return;
-				const rustFile = `${root}/notices/rust.txt`;
+				const rustPart = rust();
+				if (rustPart === null) {
+					this.warn(
+						'web/notices/rust.txt is missing, so /third-party-notices.txt has no Rust crates. Run `just notices` first.'
+					);
+				}
 				this.emitFile({
 					type: 'asset',
 					fileName: 'third-party-notices.txt',
-					source: joinNotices(
-						readFileSync(`${root}/notices/copied.txt`, 'utf8'),
-						formatPackages(packages),
-						existsSync(rustFile) ? readFileSync(rustFile, 'utf8') : null
-					)
+					source: joinNotices(copied(), formatPackages(packages), rustPart)
 				});
 			}
 		}
