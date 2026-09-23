@@ -165,19 +165,19 @@ pub async fn claim(
     }
 
     // 4. argon2id takes about 19 MiB and tens of milliseconds: off the
-    //    async threads.
+    //    async threads, and only a few at once.
     let password = claim.password;
-    let hash = match tokio::task::spawn_blocking(move || crate::passwords::hash(&password)).await {
-        Ok(Ok(hash)) => hash,
-        Ok(Err(e)) => {
+    let hash = match crate::passwords::run(move || crate::passwords::hash(&password)).await {
+        Some(Ok(hash)) => hash,
+        Some(Err(e)) => {
             eprintln!("lodger: setup: cannot hash the password: {e}");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "cannot hash the password",
             );
         }
-        Err(e) => {
-            eprintln!("lodger: setup: the hashing task failed: {e}");
+        None => {
+            eprintln!("lodger: setup: the hashing task failed");
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "cannot hash the password",

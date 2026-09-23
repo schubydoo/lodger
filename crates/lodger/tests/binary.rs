@@ -250,11 +250,11 @@ fn serve_reads_the_configuration_file() {
     server.stop();
 }
 
-/// Starts `lodger serve` on `state` and returns the process, the address, and
-/// the setup token from the log, if one was written.
 /// The server's log lines after the start, collected while it runs.
 type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
+/// Starts `lodger serve` on `state` and returns the process, the address, and
+/// the setup token from the log, if one was written.
 fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
     let (child, addr, token, _) = serve_logged(state);
     (child, addr, token)

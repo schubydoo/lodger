@@ -166,18 +166,34 @@ pub async fn login(
     };
     let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
 
-    // After 5 failures in 15 minutes, for this account or this IP, wait.
-    let (delay, failures) = state.throttle.delay(&login.username, ip, Instant::now());
-    if !delay.is_zero() {
+    // After 5 failures in 15 minutes, for this account or this IP, wait. The
+    // attempt counts as a failure from here on, so parallel attempts see
+    // it, and one that ends early (a closed connection, a database error)
+    // stays a failure.
+    let attempt = match state.throttle.begin(&login.username, ip, Instant::now()) {
+        Ok(attempt) => attempt,
+        Err(retry) => {
+            let mut response = error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many login attempts. Try again later",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(retry.as_secs()));
+            return response;
+        }
+    };
+    if !attempt.wait.is_zero() {
         // {:?} escapes control characters, so a crafted name cannot forge
         // log lines. The name is cut, so it cannot flood the log either.
         let shown: String = login.username.chars().take(64).collect();
         eprintln!(
-            "lodger: WARNING: {failures} failed logins in 15 minutes for account {shown:?} \
+            "lodger: WARNING: {} failed logins in 15 minutes for account {shown:?} \
              or from {ip}; this attempt waits {} s",
-            delay.as_secs()
+            attempt.failures,
+            attempt.wait.as_secs()
         );
-        tokio::time::sleep(delay).await;
+        tokio::time::sleep(attempt.wait).await;
     }
 
     let account = match state.db.find_account(login.username.clone()).await {
@@ -191,18 +207,18 @@ pub async fn login(
     let stored = account.as_ref().map(|a| a.password_hash.clone());
     // argon2 runs for a missing account too, so the time does not tell
     // which usernames exist.
-    let verified = tokio::task::spawn_blocking(move || match stored {
+    let verified = crate::passwords::run(move || match stored {
         Some(stored) => crate::passwords::verify(&password, &stored),
         None => crate::passwords::verify_nobody(&password),
     })
     .await
     .unwrap_or(false);
     let Some(account) = account.filter(|_| verified) else {
-        state.throttle.fail(&login.username, ip, Instant::now());
-        // One message for both cases: no hint which part was wrong.
+        // The throttle counted the failure already. One message for both
+        // cases: no hint which part was wrong.
         return error(StatusCode::UNAUTHORIZED, "wrong username or password");
     };
-    state.throttle.succeed(&login.username);
+    state.throttle.succeed(&login.username, ip, &attempt);
 
     let (token, csrf_token) = match (random_token(), random_token()) {
         (Ok(t), Ok(c)) => (t, c),

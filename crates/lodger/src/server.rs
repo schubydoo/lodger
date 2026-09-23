@@ -95,6 +95,9 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
 /// disconnected. A database that cannot be opened does.
 pub async fn serve(config: Config) -> Result<(), String> {
     let db = Db::open(&config.state_dir).await?;
+    tokio::task::spawn_blocking(crate::passwords::prepare)
+        .await
+        .map_err(|e| format!("cannot prepare the password check: {e}"))?;
     let setup = open_setup(&db).await?;
     let host = Host::start(&config.uri).map_err(|e| format!("cannot use {:?}: {e}", config.uri))?;
     let state = AppState::new(Arc::new(host), db, setup, config.trusted_proxies.clone());

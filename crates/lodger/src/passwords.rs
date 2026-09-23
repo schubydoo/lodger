@@ -2,11 +2,24 @@
 //! defaults are: 19456 KiB, 2 iterations, 1 lane (TAD section 7.1).
 //!
 //! Both functions take tens of milliseconds and 19 MiB, so callers run them
-//! with `spawn_blocking`.
+//! through [`run`], which also limits how many run at once.
 
 use std::sync::LazyLock;
 
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use tokio::sync::Semaphore;
+
+/// argon2 runs at once, at most. Without a limit, a flood of logins could
+/// take 19 MiB on each of tokio's 512 blocking threads.
+const PARALLEL: usize = 2;
+static PERMITS: Semaphore = Semaphore::const_new(PARALLEL);
+
+/// Runs argon2 work on the blocking pool when a permit is free. `None` means
+/// that the task failed.
+pub async fn run<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let _permit = PERMITS.acquire().await.ok()?;
+    tokio::task::spawn_blocking(work).await.ok()
+}
 
 /// Hashes a new password into a PHC string with a fresh salt.
 pub fn hash(password: &str) -> Result<String, String> {
@@ -31,6 +44,12 @@ static DUMMY: LazyLock<String> = LazyLock::new(|| {
     getrandom::fill(&mut bytes).expect("the OS gives random bytes");
     hash(&hex::encode(bytes)).expect("argon2 hashes a fixed-size input")
 });
+
+/// Builds the dummy hash now, so the first login for an unknown username does
+/// not take longer than the others. Blocks for one hash.
+pub fn prepare() {
+    LazyLock::force(&DUMMY);
+}
 
 /// Spends the same time as [`verify`], and always fails.
 pub fn verify_nobody(password: &str) -> bool {
@@ -64,6 +83,28 @@ mod tests {
 
     #[test]
     fn nobody_never_verifies() {
+        super::prepare();
         assert!(!verify_nobody("anything at all"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn at_most_two_hashes_run_at_once() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let (now, most) = (now.clone(), most.clone());
+                tokio::spawn(super::run(move || {
+                    most.fetch_max(now.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    now.fetch_sub(1, Ordering::SeqCst);
+                }))
+            })
+            .collect();
+        for task in tasks {
+            assert_eq!(task.await.unwrap(), Some(()));
+        }
+        assert_eq!(most.load(Ordering::SeqCst), super::PARALLEL);
     }
 }
