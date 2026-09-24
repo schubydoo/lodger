@@ -117,10 +117,8 @@ fn group(root: &Path) -> Check {
     let Some(lodger) = entry(&users, "lodger") else {
         return Check::fail(
             NAME,
-            "the lodger user does not exist, so the service cannot run",
-            &[
-                "sudo useradd --system --groups libvirt --home-dir /var/lib/lodger --shell /usr/sbin/nologin lodger",
-            ],
+            "the lodger user does not exist, so the service cannot run. `lodger install` creates it",
+            &["sudo lodger install"],
         );
     };
     // polkit reads real membership: the primary group or the member list.
@@ -446,7 +444,7 @@ mod tests {
         assert_eq!(other.fix[0], "sudo usermod -aG libvirt lodger");
         let no_user = with(GROUPS, "root:x:0:0::/root:/bin/sh\n");
         assert!(no_user.reason.contains("the lodger user does not exist"));
-        assert!(no_user.fix[0].starts_with("sudo useradd --system --groups libvirt "));
+        assert_eq!(no_user.fix, ["sudo lodger install"]);
         let no_group = with("kvm:x:993:libvirt\n", USERS);
         assert!(no_group.reason.contains("the libvirt group does not exist"));
     }
