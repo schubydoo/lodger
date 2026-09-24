@@ -37,7 +37,9 @@ fn main() {
             ..Default::default()
         })
         .map(|line| println!("{line}")),
-        cli::Command::Install => install::run_install().map(|line| println!("{line}")),
+        cli::Command::Install { self_signed } => {
+            install::run_install(self_signed.as_deref()).map(|line| println!("{line}"))
+        }
         cli::Command::Uninstall { purge } => {
             install::run_uninstall(purge).map(|line| println!("{line}"))
         }

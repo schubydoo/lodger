@@ -15,10 +15,10 @@ use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::cli::DEFAULT_LISTEN;
-use crate::config::{Config, Overrides};
+use crate::config::{Config, Overrides, TlsFiles};
 
 /// The hardened unit from TAD section 6.5.
 const UNIT: &str = include_str!("../dist/lodger.service");
@@ -31,6 +31,9 @@ const CONFIG: &str = include_str!("../dist/config.toml");
 const BIN: &str = "usr/local/bin/lodger";
 const CONFIG_DIR: &str = "etc/lodger";
 const CONFIG_FILE: &str = "etc/lodger/config.toml";
+/// The pair that `--self-signed` writes.
+const TLS_CERT: &str = "etc/lodger/tls/cert.pem";
+const TLS_KEY: &str = "etc/lodger/tls/key.pem";
 const UNIT_FILE: &str = "etc/systemd/system/lodger.service";
 const SYSUSERS_FILE: &str = "etc/sysusers.d/lodger.conf";
 const STATE_DIR: &str = "var/lib/lodger";
@@ -97,35 +100,69 @@ impl Host {
     }
 }
 
-/// `sudo lodger install`: installs and starts the service, then waits until it
-/// listens.
-pub fn run_install() -> Result<String, String> {
+/// `sudo lodger install [--self-signed <name>]`: installs and starts the
+/// service, then waits until it listens.
+pub fn run_install(self_signed: Option<&str>) -> Result<String, String> {
     crate::admin::require_root(std::fs::read_to_string("/proc/self/status"), "install")?;
     let exe = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
-    let host = Host::new("/");
-    let listen = install(&host, &exe, &mut System)?;
-    wait_listening(listen, START_TIMEOUT)?;
-    ready_line(&host, listen)
+    let done = install(
+        &Host::new("/"),
+        &exe,
+        self_signed,
+        SystemTime::now(),
+        &mut System,
+    )?;
+    wait_listening(done.listen, START_TIMEOUT)?;
+    Ok(done.message())
 }
 
-/// The line that says where Lodger runs. The scheme follows the installed
-/// configuration, which may turn on TLS.
-fn ready_line(host: &Host, listen: SocketAddr) -> Result<String, String> {
-    let config = Config::load(
-        Overrides {
-            config: Some(host.path(CONFIG_FILE)),
-            ..Overrides::default()
-        },
-        None,
-    )?;
-    let scheme = if config.tls.is_some() {
-        "https"
-    } else {
-        "http"
-    };
-    Ok(format!(
-        "Lodger runs at {scheme}://{listen}. Read the setup token with: sudo journalctl -u lodger"
-    ))
+/// What an install did, for the lines that it prints.
+#[derive(Debug)]
+struct Installed {
+    listen: SocketAddr,
+    /// The configuration turns on built-in TLS.
+    tls: bool,
+    /// The pair that `--self-signed` made.
+    certificate: Option<Certificate>,
+}
+
+/// The facts about a new self-signed pair that the operator needs.
+#[derive(Debug)]
+struct Certificate {
+    name: String,
+    fingerprint: String,
+    not_after: String,
+}
+
+impl Installed {
+    fn message(&self) -> String {
+        let scheme = if self.tls { "https" } else { "http" };
+        let mut out = format!(
+            "Lodger runs at {scheme}://{}. Read the setup token with: sudo journalctl -u lodger",
+            self.listen
+        );
+        let Some(cert) = &self.certificate else {
+            return out;
+        };
+        out.push_str(&format!(
+            "\nMade a self-signed certificate for {}, valid until {}.\nSHA-256 fingerprint: {}\n\
+             Your browser warns about this certificate. Accept it only if the browser shows the \
+             same fingerprint.",
+            cert.name, cert.not_after, cert.fingerprint
+        ));
+        if self.listen.ip().is_loopback() {
+            let example = match cert.name.parse::<std::net::IpAddr>() {
+                Ok(ip) => SocketAddr::new(ip, self.listen.port()).to_string(),
+                Err(_) => format!("<this host's LAN address>:{}", self.listen.port()),
+            };
+            out.push_str(&format!(
+                "\nLodger still listens only on {}. To serve the LAN, set listen = \"{example}\" \
+                 in /etc/lodger/config.toml, then run: sudo systemctl restart lodger",
+                self.listen
+            ));
+        }
+        out
+    }
 }
 
 /// `sudo lodger uninstall [--purge]`.
@@ -134,31 +171,117 @@ pub fn run_uninstall(purge: bool) -> Result<String, String> {
     uninstall(&Host::new("/"), purge, &mut System)
 }
 
-/// Installs the service and returns the address it listens on.
+/// Installs the service. With `self_signed`, it also makes a self-signed
+/// pair for that name and turns on TLS in the configuration.
 ///
 /// The checks run first, and a failed check changes nothing. An existing
-/// configuration file stays, because the operator may have changed it.
-fn install(host: &Host, exe: &Path, run: &mut impl Run) -> Result<SocketAddr, String> {
-    let listen = check(host, run)?;
+/// configuration file stays, because the operator may have changed it: the
+/// pair only sets its `tls_cert` and `tls_key`, and keeps its comments.
+fn install(
+    host: &Host,
+    exe: &Path,
+    self_signed: Option<&str>,
+    now: SystemTime,
+    run: &mut impl Run,
+) -> Result<Installed, String> {
+    let listen = check(host, self_signed, run)?;
     copy_binary(exe, &host.path(BIN))?;
     write(&host.path(SYSUSERS_FILE), SYSUSERS.as_bytes(), 0o644)?;
     run.run("systemd-sysusers", &[&host.arg(SYSUSERS_FILE)])?;
     if !host.path(CONFIG_FILE).exists() {
         write(&host.path(CONFIG_FILE), CONFIG.as_bytes(), 0o644)?;
     }
+    // After systemd-sysusers, which creates the user that owns the key.
+    let certificate = self_signed
+        .map(|name| write_self_signed(host, name, now))
+        .transpose()?;
     write(&host.path(UNIT_FILE), UNIT.as_bytes(), 0o644)?;
     run.run("systemctl", &["daemon-reload"])?;
     run.run("systemctl", &["enable", SERVICE])?;
     // A restart also starts a stopped service, and an upgrade needs it to run
     // the new binary.
     run.run("systemctl", &["restart", SERVICE])?;
-    Ok(listen)
+    let tls = Config::load(
+        Overrides {
+            config: Some(host.path(CONFIG_FILE)),
+            ..Overrides::default()
+        },
+        None,
+    )?
+    .tls
+    .is_some();
+    Ok(Installed {
+        listen,
+        tls,
+        certificate,
+    })
+}
+
+/// The files that `--self-signed` writes, as the configuration names them.
+fn self_signed_files() -> TlsFiles {
+    TlsFiles {
+        cert: Path::new("/").join(TLS_CERT),
+        key: Path::new("/").join(TLS_KEY),
+    }
+}
+
+/// Makes the pair, writes it, and names it in the configuration. The key is
+/// readable only by root and the lodger user.
+fn write_self_signed(host: &Host, name: &str, now: SystemTime) -> Result<Certificate, String> {
+    let pair = crate::tls::self_signed(name, now)?;
+    let users = std::fs::read_to_string(host.path(PASSWD_FILE)).unwrap_or_default();
+    let owner = user_ids(&users, "lodger").ok_or(
+        "the lodger user does not exist after systemd-sysusers, so the TLS key has no owner",
+    )?;
+    write_as(
+        &host.path(TLS_KEY),
+        pair.key_pem.as_bytes(),
+        0o600,
+        Some(owner),
+    )?;
+    write(&host.path(TLS_CERT), pair.cert_pem.as_bytes(), 0o644)?;
+    set_tls_paths(&host.path(CONFIG_FILE))?;
+    Ok(Certificate {
+        name: name.to_owned(),
+        fingerprint: pair.fingerprint,
+        not_after: pair.not_after.to_string(),
+    })
+}
+
+/// Sets `tls_cert` and `tls_key` in the configuration file. `toml_edit` keeps
+/// the operator's comments and the order of the other keys.
+fn set_tls_paths(path: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let files = self_signed_files();
+    doc["tls_cert"] = toml_edit::value(files.cert.display().to_string());
+    doc["tls_key"] = toml_edit::value(files.key.display().to_string());
+    write(path, doc.to_string().as_bytes(), 0o644)
+}
+
+/// The user and group IDs of `name` in the text of `/etc/passwd`.
+fn user_ids(passwd: &str, name: &str) -> Option<(u32, u32)> {
+    let line = passwd
+        .lines()
+        .find(|line| line.split(':').next() == Some(name))?;
+    let mut fields = line.split(':').skip(2);
+    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }
 
 /// Checks the host and returns the address that the service will listen on.
 /// A failure lists every problem, each with the step that fixes it.
-fn check(host: &Host, run: &mut impl Run) -> Result<SocketAddr, String> {
+fn check(host: &Host, self_signed: Option<&str>, run: &mut impl Run) -> Result<SocketAddr, String> {
     let mut problems = Vec::new();
+    if let Some(name) = self_signed
+        && !crate::tls::valid_name(name)
+    {
+        problems.push(format!(
+            "{name:?} is not an IP address or a host name, so it cannot go into a certificate."
+        ));
+    }
     if !host.path(SYSTEMD_RUNNING).is_dir() {
         problems.push(
             "systemd does not run on this host. Lodger installs only as a systemd service."
@@ -186,7 +309,21 @@ fn check(host: &Host, run: &mut impl Run) -> Result<SocketAddr, String> {
             ..Overrides::default()
         };
         match Config::load(overrides, None) {
-            Ok(config) => Some(config.listen),
+            Ok(config) => {
+                // Never replace a certificate that the operator chose.
+                if self_signed.is_some()
+                    && let Some(tls) = config.tls
+                    && tls != self_signed_files()
+                {
+                    problems.push(format!(
+                        "the configuration already names the TLS certificate {}. To replace it \
+                         with a self-signed one, remove tls_cert and tls_key from \
+                         /etc/lodger/config.toml first.",
+                        tls.cert.display()
+                    ));
+                }
+                Some(config.listen)
+            }
             Err(e) => {
                 problems.push(format!("the existing configuration is not valid: {e}"));
                 None
@@ -260,6 +397,12 @@ fn copy_binary(exe: &Path, dest: &Path) -> Result<(), String> {
 /// Writes a file with the given mode through a temporary file in the same
 /// directory, so a reader never sees half of it.
 fn write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    write_as(path, bytes, mode, None)
+}
+
+/// Like [`write`], and with an owner `(uid, gid)`, set before the file gets
+/// its name, so no other user can open it in between.
+fn write_as(path: &Path, bytes: &[u8], mode: u32, owner: Option<(u32, u32)>) -> Result<(), String> {
     let dir = path.parent().expect("every target has a parent");
     create_dirs(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let name = path.file_name().expect("every target has a name");
@@ -271,6 +414,9 @@ fn write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
         .mode(mode)
         .open(&temp)
         .and_then(|mut f| {
+            if let Some((uid, gid)) = owner {
+                std::os::unix::fs::fchown(&f, Some(uid), Some(gid))?;
+            }
             f.write_all(bytes)?;
             // The mode of `open` passes through the umask.
             f.set_permissions(std::fs::Permissions::from_mode(mode))?;
@@ -415,7 +561,9 @@ mod tests {
     fn install_writes_every_file_then_starts_the_service() {
         let (_dir, host, exe) = ready_host();
         let mut run = Recorder::default();
-        let listen = install(&host, &exe, &mut run).unwrap();
+        let listen = install(&host, &exe, None, SystemTime::now(), &mut run)
+            .unwrap()
+            .listen;
         assert_eq!(listen.to_string(), DEFAULT_LISTEN);
         assert_eq!(std::fs::read(host.path(BIN)).unwrap(), b"\x7fELF lodger");
         assert_eq!(mode(&host, BIN), 0o755);
@@ -448,7 +596,14 @@ mod tests {
         let (_dir, host, exe) = ready_host();
         std::fs::remove_file(host.path(LIBVIRT_SOCKETS[0])).unwrap();
         put(&host, LIBVIRT_SOCKETS[1], "");
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -473,7 +628,7 @@ mod tests {
             break_host(&host);
             let before = tree(&host);
             let mut run = Recorder::default();
-            let err = install(&host, &exe, &mut run).unwrap_err();
+            let err = install(&host, &exe, None, SystemTime::now(), &mut run).unwrap_err();
             assert!(
                 err.starts_with("cannot install, and nothing changed:"),
                 "{err}"
@@ -492,7 +647,14 @@ mod tests {
     fn every_problem_is_listed_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let host = Host::new(dir.path());
-        let err = install(&host, Path::new("/nonexistent"), &mut Recorder::default()).unwrap_err();
+        let err = install(
+            &host,
+            Path::new("/nonexistent"),
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap_err();
         assert_eq!(err.matches("\n- ").count(), 3, "{err}");
     }
 
@@ -504,7 +666,7 @@ mod tests {
             taken: Some(DEFAULT_LISTEN.parse().unwrap()),
             ..Recorder::default()
         };
-        let err = install(&host, &exe, &mut run).unwrap_err();
+        let err = install(&host, &exe, None, SystemTime::now(), &mut run).unwrap_err();
         assert!(
             err.contains("another program listens on 127.0.0.1:8460"),
             "{err}"
@@ -516,12 +678,19 @@ mod tests {
     #[test]
     fn a_reinstall_expects_the_old_service_on_the_port() {
         let (_dir, host, exe) = ready_host();
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         let mut run = Recorder {
             taken: Some(DEFAULT_LISTEN.parse().unwrap()),
             ..Recorder::default()
         };
-        install(&host, &exe, &mut run).unwrap();
+        install(&host, &exe, None, SystemTime::now(), &mut run).unwrap();
     }
 
     /// An address where nothing can listen: a connection to port 0 is always
@@ -542,7 +711,15 @@ mod tests {
     fn an_existing_configuration_stays_and_names_the_address() {
         let (_dir, host, exe) = ready_host();
         put(&host, CONFIG_FILE, "listen = \"127.0.0.1:9123\"\n");
-        let listen = install(&host, &exe, &mut Recorder::default()).unwrap();
+        let listen = install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap()
+        .listen;
         assert_eq!(listen.to_string(), "127.0.0.1:9123");
         assert_eq!(read(&host, CONFIG_FILE), "listen = \"127.0.0.1:9123\"\n");
     }
@@ -553,7 +730,7 @@ mod tests {
         put(&host, CONFIG_FILE, "listn = \"127.0.0.1:9123\"\n");
         let before = tree(&host);
         let mut run = Recorder::default();
-        let err = install(&host, &exe, &mut run).unwrap_err();
+        let err = install(&host, &exe, None, SystemTime::now(), &mut run).unwrap_err();
         assert!(
             err.contains("the existing configuration is not valid"),
             "{err}"
@@ -568,7 +745,14 @@ mod tests {
         let (_dir, host, exe) = ready_host();
         put(&host, UNIT_FILE, "[Service]\nExecStart=/old\n");
         put(&host, BIN, "old binary");
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         assert_eq!(read(&host, UNIT_FILE), UNIT);
         assert_eq!(std::fs::read(host.path(BIN)).unwrap(), b"\x7fELF lodger");
     }
@@ -576,9 +760,23 @@ mod tests {
     #[test]
     fn the_installed_binary_can_install_itself_again() {
         let (_dir, host, exe) = ready_host();
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         std::fs::remove_file(&exe).unwrap();
-        install(&host, &host.path(BIN), &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &host.path(BIN),
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         assert_eq!(std::fs::read(host.path(BIN)).unwrap(), b"\x7fELF lodger");
     }
 
@@ -589,7 +787,7 @@ mod tests {
             fail: Some("systemd-sysusers"),
             ..Recorder::default()
         };
-        let err = install(&host, &exe, &mut run).unwrap_err();
+        let err = install(&host, &exe, None, SystemTime::now(), &mut run).unwrap_err();
         assert!(err.starts_with("systemd-sysusers "), "{err}");
         assert_eq!(run.calls.len(), 1);
         assert!(!host.path(UNIT_FILE).exists());
@@ -598,7 +796,14 @@ mod tests {
     #[test]
     fn uninstall_removes_the_service_and_keeps_the_data() {
         let (_dir, host, exe) = ready_host();
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         put(&host, &format!("{STATE_DIR}/lodger.db"), "data");
         put(
             &host,
@@ -625,7 +830,14 @@ mod tests {
     #[test]
     fn purge_removes_everything_that_lodger_wrote_and_nothing_else() {
         let (_dir, host, exe) = ready_host();
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         put(&host, &format!("{STATE_DIR}/lodger.db"), "data");
         put(
             &host,
@@ -662,7 +874,14 @@ mod tests {
     #[test]
     fn a_failed_stop_keeps_the_unit() {
         let (_dir, host, exe) = ready_host();
-        install(&host, &exe, &mut Recorder::default()).unwrap();
+        install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         let mut run = Recorder {
             fail: Some("systemctl disable"),
             ..Recorder::default()
@@ -819,10 +1038,16 @@ mod tests {
     #[test]
     fn the_ready_line_follows_the_installed_configuration() {
         let (_dir, host, exe) = ready_host();
-        let listen = install(&host, &exe, &mut Recorder::default()).unwrap();
+        let done = install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         assert!(
-            ready_line(&host, listen)
-                .unwrap()
+            done.message()
                 .starts_with("Lodger runs at http://127.0.0.1:8460. ")
         );
         // A later install keeps an operator's TLS settings, so it says https.
@@ -831,11 +1056,265 @@ mod tests {
             CONFIG_FILE,
             "tls_cert = \"/etc/ssl/l.pem\"\ntls_key = \"/etc/ssl/l.key\"\n",
         );
-        let listen = install(&host, &exe, &mut Recorder::default()).unwrap();
+        let done = install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
         assert!(
-            ready_line(&host, listen)
-                .unwrap()
+            done.message()
                 .starts_with("Lodger runs at https://127.0.0.1:8460. ")
         );
+    }
+
+    /// A ready host with a lodger user that has this test's own user ID, so
+    /// the key's owner can be set without root. Its group is one of this
+    /// process's other groups, when it has one: a user may give a file to any
+    /// of its groups, and a group that differs from the default one proves
+    /// that the owner was set.
+    fn ready_host_with_user() -> (tempfile::TempDir, Host, PathBuf, (u32, u32)) {
+        use std::os::unix::fs::MetadataExt;
+        let (dir, host, exe) = ready_host();
+        let meta = std::fs::metadata(dir.path()).unwrap();
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let other_group = status
+            .lines()
+            .find_map(|l| l.strip_prefix("Groups:"))
+            .and_then(|groups| {
+                groups
+                    .split_whitespace()
+                    .filter_map(|g| g.parse::<u32>().ok())
+                    .find(|&g| g != meta.gid())
+            });
+        let ids = (meta.uid(), other_group.unwrap_or(meta.gid()));
+        put(
+            &host,
+            PASSWD_FILE,
+            &format!(
+                "root:x:0:0::/root:/bin/sh\nlodger:x:{}:{}::/var/lib/lodger:/x\n",
+                ids.0, ids.1
+            ),
+        );
+        (dir, host, exe, ids)
+    }
+
+    fn fingerprint_of(pem: &str) -> String {
+        use rustls_pki_types::pem::PemObject;
+        let der = rustls_pki_types::CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
+        <sha2::Sha256 as sha2::Digest>::digest(&der)
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+
+    fn installed_config(host: &Host) -> Config {
+        Config::load(
+            Overrides {
+                config: Some(host.path(CONFIG_FILE)),
+                ..Overrides::default()
+            },
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn self_signed_writes_the_pair_and_turns_on_tls() {
+        use std::os::unix::fs::MetadataExt;
+        let (_dir, host, exe, ids) = ready_host_with_user();
+        let mut run = Recorder::default();
+        let done = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap();
+
+        assert_eq!(mode(&host, TLS_KEY), 0o600);
+        assert_eq!(mode(&host, TLS_CERT), 0o644);
+        let key = std::fs::metadata(host.path(TLS_KEY)).unwrap();
+        assert_eq!((key.uid(), key.gid()), ids);
+        // The configuration names the host paths, and the pair on disk loads.
+        let config = installed_config(&host);
+        assert_eq!(config.tls, Some(self_signed_files()));
+        crate::tls::server_config(&TlsFiles {
+            cert: host.path(TLS_CERT),
+            key: host.path(TLS_KEY),
+        })
+        .unwrap();
+        // The template's comments stay.
+        let text = read(&host, CONFIG_FILE);
+        assert!(text.starts_with("# Lodger configuration."), "{text}");
+        assert!(text.contains("# The libvirt connection."), "{text}");
+
+        let cert = done.certificate.as_ref().unwrap();
+        assert_eq!(cert.fingerprint, fingerprint_of(&read(&host, TLS_CERT)));
+        assert!(done.tls);
+        let message = done.message();
+        assert!(
+            message.starts_with("Lodger runs at https://127.0.0.1:8460."),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("SHA-256 fingerprint: {}\n", cert.fingerprint)),
+            "{message}"
+        );
+        assert!(
+            message.contains("set listen = \"192.168.1.10:8460\""),
+            "{message}"
+        );
+        // The service restarts after the pair exists.
+        assert_eq!(
+            run.calls.last().unwrap(),
+            "systemctl restart lodger.service"
+        );
+    }
+
+    #[test]
+    fn a_second_self_signed_install_replaces_the_pair_and_keeps_one_setting() {
+        let (_dir, host, exe, _) = ready_host_with_user();
+        let first = install(
+            &host,
+            &exe,
+            Some("lodger.lan"),
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+        let config = read(&host, CONFIG_FILE);
+        let second = install(
+            &host,
+            &exe,
+            Some("lodger.lan"),
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            first.certificate.unwrap().fingerprint,
+            second.certificate.as_ref().unwrap().fingerprint
+        );
+        assert_eq!(
+            read(&host, CONFIG_FILE),
+            config,
+            "the setting is written once"
+        );
+        assert_eq!(
+            config.matches("tls_cert =").count(),
+            2,
+            "one comment, one setting"
+        );
+        assert!(second.message().contains("<this host's LAN address>:8460"));
+    }
+
+    #[test]
+    fn self_signed_keeps_a_listen_address_and_says_nothing_about_it() {
+        let (_dir, host, exe, _) = ready_host_with_user();
+        put(&host, CONFIG_FILE, "listen = \"192.168.1.10:8460\"\n");
+        let done = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+        let message = done.message();
+        assert!(
+            message.starts_with("Lodger runs at https://192.168.1.10:8460."),
+            "{message}"
+        );
+        assert!(!message.contains("set listen"), "{message}");
+        assert_eq!(
+            installed_config(&host).listen.to_string(),
+            "192.168.1.10:8460"
+        );
+    }
+
+    #[test]
+    fn self_signed_never_replaces_the_operators_certificate() {
+        let (_dir, host, exe, _) = ready_host_with_user();
+        put(
+            &host,
+            CONFIG_FILE,
+            "tls_cert = \"/etc/ssl/lodger.pem\"\ntls_key = \"/etc/ssl/lodger.key\"\n",
+        );
+        let before = tree(&host);
+        let mut run = Recorder::default();
+        let err = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("already names the TLS certificate /etc/ssl/lodger.pem"),
+            "{err}"
+        );
+        assert_eq!(tree(&host), before, "nothing changed");
+        assert!(run.calls.is_empty());
+    }
+
+    #[test]
+    fn self_signed_refuses_a_bad_name_before_any_change() {
+        let (_dir, host, exe, _) = ready_host_with_user();
+        let before = tree(&host);
+        let err = install(
+            &host,
+            &exe,
+            Some("lodger lan"),
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("\"lodger lan\" is not an IP address or a host name"),
+            "{err}"
+        );
+        assert_eq!(tree(&host), before, "nothing changed");
+    }
+
+    #[test]
+    fn self_signed_needs_the_lodger_user_for_the_key() {
+        // ready_host has no passwd file: systemd-sysusers only ran in the
+        // recorder.
+        let (_dir, host, exe) = ready_host();
+        let err = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("the lodger user does not exist"), "{err}");
+        assert!(!host.path(TLS_KEY).exists());
+    }
+
+    #[test]
+    fn a_plain_install_keeps_plain_http() {
+        let (_dir, host, exe) = ready_host();
+        let done = install(
+            &host,
+            &exe,
+            None,
+            SystemTime::now(),
+            &mut Recorder::default(),
+        )
+        .unwrap();
+        assert!(!done.tls && done.certificate.is_none());
+        assert_eq!(
+            done.message(),
+            "Lodger runs at http://127.0.0.1:8460. Read the setup token with: sudo journalctl -u lodger"
+        );
+        assert!(!host.path(TLS_CERT).exists());
     }
 }

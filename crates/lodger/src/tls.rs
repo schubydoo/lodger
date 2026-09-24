@@ -85,6 +85,70 @@ pub fn not_after(path: &Path) -> Result<DateTime, String> {
     Ok(cert.tbs_certificate().validity().not_after.to_date_time())
 }
 
+/// How long a certificate from `lodger install --self-signed` lasts.
+pub const SELF_SIGNED_DAYS: u64 = 730;
+
+/// A new self-signed pair, as PEM text.
+pub struct SelfSigned {
+    pub cert_pem: String,
+    pub key_pem: String,
+    /// The SHA-256 fingerprint of the certificate, as `AB:CD:...`, which a
+    /// person compares with the one that the browser shows.
+    pub fingerprint: String,
+    pub not_after: DateTime,
+}
+
+/// Makes a self-signed server certificate for `name`, an IP address or a
+/// host name, valid from 1 hour before `now` for [`SELF_SIGNED_DAYS`]. The
+/// hour allows for a client clock that is a little behind.
+pub fn self_signed(name: &str, now: std::time::SystemTime) -> Result<SelfSigned, String> {
+    use rcgen::{DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair};
+    let fail = |e: rcgen::Error| format!("cannot make a certificate for {name}: {e}");
+    let key = KeyPair::generate().map_err(fail)?;
+    let mut params = rcgen::CertificateParams::new(vec![name.to_owned()]).map_err(fail)?;
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.is_ca = IsCa::ExplicitNoCa;
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    params.not_before = (now - Duration::from_secs(60 * 60)).into();
+    params.not_after = (now + Duration::from_secs(SELF_SIGNED_DAYS * 24 * 60 * 60)).into();
+    let cert = params.self_signed(&key).map_err(fail)?;
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(cert.der());
+    let fingerprint = digest
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(":");
+    let cert_pem = cert.pem();
+    let not_after = Certificate::from_pem(cert_pem.as_bytes())
+        .map_err(|e| format!("cannot read the new certificate: {e}"))?
+        .tbs_certificate()
+        .validity()
+        .not_after
+        .to_date_time();
+    Ok(SelfSigned {
+        cert_pem,
+        key_pem: key.serialize_pem(),
+        fingerprint,
+        not_after,
+    })
+}
+
+/// True if `name` can go into a certificate: an IP address, or a host name
+/// of letters, digits, and hyphens in dot-separated labels.
+pub fn valid_name(name: &str) -> bool {
+    if name.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+}
+
 /// A listener that hands axum only connections whose TLS handshake finished.
 ///
 /// A background task accepts TCP connections and runs each handshake in a task
@@ -179,8 +243,128 @@ pub mod test_pair {
 
 #[cfg(test)]
 mod tests {
-    use super::{not_after, server_config, test_pair};
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, ServerName};
+    use tokio_rustls::rustls::{self, ClientConnection, ServerConnection};
+
+    use super::{not_after, self_signed, server_config, test_pair, valid_name};
     use crate::config::TlsFiles;
+
+    /// Runs a full TLS handshake between this server pair and a client that
+    /// trusts only the certificate and asks for `server_name`.
+    fn handshake(pair: &super::SelfSigned, server_name: &str) -> Result<(), String> {
+        let dir = tempfile::tempdir().unwrap();
+        let files = TlsFiles {
+            cert: dir.path().join("cert.pem"),
+            key: dir.path().join("key.pem"),
+        };
+        std::fs::write(&files.cert, &pair.cert_pem).unwrap();
+        std::fs::write(&files.key, &pair.key_pem).unwrap();
+        let server = server_config(&files)?;
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from_pem_slice(pair.cert_pem.as_bytes()).unwrap())
+            .unwrap();
+        let client = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let (mut ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            let mut conn = ServerConnection::new(server).unwrap();
+            while conn.is_handshaking() {
+                if conn.complete_io(&mut theirs).is_err() {
+                    break;
+                }
+            }
+        });
+        let name = ServerName::try_from(server_name.to_owned()).unwrap();
+        let mut conn = ClientConnection::new(Arc::new(client), name).unwrap();
+        let result = loop {
+            if !conn.is_handshaking() {
+                break Ok(());
+            }
+            if let Err(e) = conn.complete_io(&mut ours) {
+                break Err(e.to_string());
+            }
+        };
+        drop(ours);
+        peer.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn a_self_signed_pair_is_valid_only_for_its_name() {
+        let now = SystemTime::now();
+        let ip = self_signed("127.0.0.1", now).unwrap();
+        handshake(&ip, "127.0.0.1").unwrap();
+        let err = handshake(&ip, "127.0.0.2").unwrap_err();
+        assert!(err.contains("certificate not valid for name"), "{err}");
+
+        let host = self_signed("lodger.lan", now).unwrap();
+        handshake(&host, "lodger.lan").unwrap();
+        assert!(handshake(&host, "other.lan").is_err());
+    }
+
+    #[test]
+    fn a_self_signed_pair_lasts_730_days_and_has_a_fingerprint() {
+        let now = SystemTime::now();
+        let pair = self_signed("192.168.1.10", now).unwrap();
+        let end = pair.not_after.to_system_time();
+        // A literal, so a change of the constant fails here.
+        let want = now + Duration::from_secs(730 * 24 * 60 * 60);
+        // X.509 time has whole seconds.
+        let off = want.duration_since(end).unwrap_or_else(|e| e.duration());
+        assert!(off < Duration::from_secs(2), "{off:?}");
+        let parts: Vec<_> = pair.fingerprint.split(':').collect();
+        assert_eq!(parts.len(), 32, "{}", pair.fingerprint);
+        assert!(
+            parts.iter().all(|p| p.len() == 2
+                && p.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())),
+            "{}",
+            pair.fingerprint
+        );
+        // Two pairs never share a key.
+        assert_ne!(
+            pair.fingerprint,
+            self_signed("192.168.1.10", now).unwrap().fingerprint
+        );
+    }
+
+    #[test]
+    fn a_name_is_an_ip_address_or_a_host_name() {
+        for good in [
+            "192.168.1.10",
+            "::1",
+            "fe80::1",
+            "lodger",
+            "lodger.lan",
+            "a-b.c1.example",
+        ] {
+            assert!(valid_name(good), "{good}");
+        }
+        let long_label = "a".repeat(64);
+        for bad in [
+            "",
+            "lodger lan",
+            "-lodger.lan",
+            "lodger-.lan",
+            "lodger..lan",
+            "*.lan",
+            "lodger.lan/x",
+            "http://lodger.lan",
+            long_label.as_str(),
+        ] {
+            assert!(!valid_name(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn a_matching_pair_loads_and_offers_only_http_1_1() {
