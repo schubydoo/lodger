@@ -19,7 +19,7 @@ use crate::setup::{self, Setup, SetupToken};
 use crate::stats::Stats;
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
-use crate::{accounts, actions, api, auth, console, security, ws};
+use crate::{accounts, actions, api, auth, console, pools, security, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -86,6 +86,13 @@ pub fn router(state: AppState) -> Router {
             get(api::vm).delete(actions::delete).patch(actions::update),
         )
         .route("/api/vms/{id}/actions/{action}", post(actions::run))
+        .route("/api/pools", get(pools::list).post(pools::create))
+        .route(
+            "/api/pools/{id}",
+            get(pools::detail)
+                .patch(pools::change)
+                .delete(pools::remove),
+        )
         .route("/api/session", get(auth::current).delete(auth::logout))
         .route("/api/ws-tickets", post(auth::issue_ticket))
         .route("/api/accounts", get(accounts::list).post(accounts::create))
@@ -1327,6 +1334,217 @@ mod tests {
                 lifecycle("failed", r#"{"action":"delete","reason":"wrong_state"}"#),
                 lifecycle("ok", r#"{"action":"force-off"}"#),
                 lifecycle("ok", r#"{"action":"delete"}"#),
+            ]
+        );
+    }
+
+    /// Pool `id` as the API reports it, polled until `done` accepts it or 5
+    /// seconds pass. Returns the last answer.
+    async fn wait_for_pool(
+        addr: &str,
+        tab: &Tab,
+        id: &str,
+        done: impl Fn(u16, &Value) -> bool,
+    ) -> (u16, Value) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (status, pool) = call(addr, tab, "GET", &format!("/api/pools/{id}"), None).await;
+            if done(status, &pool) || Instant::now() > deadline {
+                return (status, pool);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn pools_are_created_changed_removed_and_audited() {
+        let (addr, token, state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let name = "lodger-spike-pool-api";
+        let path = "/srv/lodger-spike-pool-api";
+        let create = serde_json::json!({ "name": name, "kind": "dir", "path": path });
+        let (status, answer) = call(&addr, &tab, "POST", "/api/pools", Some(create.clone())).await;
+        assert_eq!(status, 201, "{answer}");
+        let id = answer["uuid"].as_str().unwrap().to_owned();
+        let (status, pool) = wait_for_pool(&addr, &tab, &id, |s, _| s == 200).await;
+        assert_eq!(status, 200, "{pool}");
+        assert_eq!(pool["name"], name);
+        assert_eq!(pool["state"], "running");
+        assert_eq!(pool["autostart"], true);
+        assert_eq!(pool["kind"], "dir");
+        assert_eq!(pool["path"], path);
+        assert_eq!(pool["used_by"], serde_json::json!([]));
+        let (_, list) = call(&addr, &tab, "GET", "/api/pools", None).await;
+        assert!(list.as_array().unwrap().iter().any(|p| p["name"] == name));
+
+        // Rejected before any change.
+        let rejects = [
+            (create.clone(), 409, "exists already"),
+            (
+                serde_json::json!({ "name": "lodger-spike-pool-api2", "kind": "dir", "path": "/srv/lodger-spike-pool-api/" }),
+                422,
+                "Pool folder is the folder of pool \"lodger-spike-pool-api\" already",
+            ),
+            (
+                serde_json::json!({ "name": "p2", "kind": "dir", "path": "/etc/vm" }),
+                422,
+                "system folder",
+            ),
+            (
+                serde_json::json!({ "name": "p2", "kind": "dir" }),
+                422,
+                "Pool folder is empty",
+            ),
+            (
+                serde_json::json!({ "name": "p2", "kind": "nfs", "export": "/x" }),
+                422,
+                "NFS server is empty",
+            ),
+            (
+                serde_json::json!({ "name": "bad name", "kind": "dir", "path": "/srv/x" }),
+                422,
+                "Pool name",
+            ),
+            (
+                serde_json::json!({ "name": "p2", "kind": "lvm", "path": "/srv/x" }),
+                400,
+                "bad JSON",
+            ),
+            (
+                serde_json::json!({ "name": "p2", "kind": "dir", "path": "/srv/x", "x": 1 }),
+                400,
+                "bad JSON",
+            ),
+        ];
+        for (body, want, text) in rejects {
+            let (status, answer) =
+                call(&addr, &tab, "POST", "/api/pools", Some(body.clone())).await;
+            assert_eq!(status, want, "{body}: {answer}");
+            let message = answer["error"].as_str().unwrap_or_default();
+            assert!(message.contains(text), "{body}: {message}");
+        }
+
+        // An NFS pool without a folder mounts below /var/lib/libvirt/pools.
+        let nfs = serde_json::json!({
+            "name": "lodger-spike-pool-nfs", "kind": "nfs", "host": "nas.lan",
+            "export": "/volume1/vm", "autostart": false,
+        });
+        let (status, answer) = call(&addr, &tab, "POST", "/api/pools", Some(nfs)).await;
+        assert_eq!(status, 201, "{answer}");
+        let nfs_id = answer["uuid"].as_str().unwrap().to_owned();
+        let (_, pool) = wait_for_pool(&addr, &tab, &nfs_id, |s, _| s == 200).await;
+        assert_eq!(pool["kind"], "netfs");
+        assert_eq!(pool["path"], "/var/lib/libvirt/pools/lodger-spike-pool-nfs");
+        assert_eq!(
+            pool["nfs"],
+            serde_json::json!({ "host": "nas.lan", "export": "/volume1/vm" })
+        );
+        assert_eq!(pool["autostart"], false);
+
+        // A VM with a disk in the pool shows as a user.
+        let outside = Virt::open(TEST_URI).await.unwrap();
+        outside
+            .job(move |c| {
+                let xml = format!(
+                    "<domain type='test'><name>lodger-spike-pool-user</name><memory>1024</memory>\
+                     <os><type>hvm</type></os><devices><disk type='file' device='disk'>\
+                     <source file='{path}/a.img'/><target dev='vda'/></disk></devices></domain>"
+                );
+                c.define_domain_xml(&xml).map(drop)
+            })
+            .await
+            .unwrap();
+        let (_, pool) = call(&addr, &tab, "GET", &format!("/api/pools/{id}"), None).await;
+        assert_eq!(
+            pool["used_by"],
+            serde_json::json!(["lodger-spike-pool-user"])
+        );
+
+        // Stop, autostart off, and the wrong state.
+        let url = format!("/api/pools/{id}");
+        let stop = serde_json::json!({ "active": false, "autostart": false });
+        assert_eq!(call(&addr, &tab, "PATCH", &url, Some(stop)).await.0, 204);
+        let (_, pool) = wait_for_pool(&addr, &tab, &id, |_, p| {
+            p["state"] == "inactive" && p["autostart"] == false
+        })
+        .await;
+        assert_eq!(
+            (&pool["state"], &pool["autostart"]),
+            (&serde_json::json!("inactive"), &serde_json::json!(false))
+        );
+        let again = serde_json::json!({ "active": false });
+        let (status, answer) = call(&addr, &tab, "PATCH", &url, Some(again)).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("the pool is not running"))
+        );
+        assert_eq!(
+            call(&addr, &tab, "PATCH", &url, Some(serde_json::json!({})))
+                .await
+                .0,
+            400
+        );
+
+        // Removal needs the typed name.
+        for body in [
+            None,
+            Some(serde_json::json!({ "confirm": "LODGER-SPIKE-POOL-API" })),
+        ] {
+            assert_eq!(call(&addr, &tab, "DELETE", &url, body).await.0, 422);
+        }
+        let confirm = serde_json::json!({ "confirm": name });
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &url, Some(confirm.clone()))
+                .await
+                .0,
+            204
+        );
+        let (status, _) = wait_for_pool(&addr, &tab, &id, |s, _| s == 404).await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &url, Some(confirm)).await.0,
+            404
+        );
+        let nfs_url = format!("/api/pools/{nfs_id}");
+        let confirm =
+            serde_json::json!({ "confirm": "lodger-spike-pool-nfs", "delete_files": true });
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &nfs_url, Some(confirm)).await.0,
+            204
+        );
+        let no_session = raw(&addr, "GET", "/api/pools", &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(no_session.0, 401);
+
+        let lines = audit_lines(&state).await;
+        let rows: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("pool."))
+            .map(String::as_str)
+            .collect();
+        let row = |event: &str, target: &str, result: &str, detail: &str| {
+            format!("{event} admin 127.0.0.1 {target} {result} {detail}")
+        };
+        assert_eq!(
+            rows,
+            [
+                row("pool.created", name, "ok", "-"),
+                row("pool.created", "lodger-spike-pool-nfs", "ok", "-"),
+                row("pool.stopped", name, "ok", "-"),
+                row("pool.edited", name, "ok", r#"{"action":"autostart-off"}"#),
+                row(
+                    "pool.stopped",
+                    name,
+                    "failed",
+                    r#"{"reason":"wrong_state"}"#
+                ),
+                row("pool.deleted", name, "ok", r#"{"action":"keep-files"}"#),
+                row(
+                    "pool.deleted",
+                    "lodger-spike-pool-nfs",
+                    "ok",
+                    r#"{"action":"delete-files"}"#
+                ),
             ]
         );
     }

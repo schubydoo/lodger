@@ -52,7 +52,10 @@ export function invalidationsFor(update: Update): (readonly unknown[])[] | 'all'
 		// A VM change can move the host's VM counts too.
 		case 'vm':
 			return [keys.vms, keys.host];
+		// A pool change can move the host's pool count too. The prefix
+		// `pools` also covers every pool's own page.
 		case 'pool':
+			return [keys.pools, keys.host];
 		case 'network':
 			return [keys.host];
 		case 'connection':

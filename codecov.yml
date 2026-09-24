@@ -118,6 +118,7 @@ component_management:
       name: lodger-virt (libvirt adapter)
       paths:
         - crates/lodger-virt/src/lib.rs
+        - crates/lodger-virt/src/pool.rs
         - crates/lodger-virt/src/cache.rs
         - crates/lodger-virt/src/conn.rs
         - crates/lodger-virt/src/delete.rs
@@ -145,6 +146,7 @@ component_management:
         - crates/lodger/src/db/mod.rs
         - crates/lodger/src/db/tests.rs
         - crates/lodger/src/passwords.rs
+        - crates/lodger/src/pools.rs
         - crates/lodger/src/security.rs
         - crates/lodger/src/server.rs
         - crates/lodger/src/setup.rs

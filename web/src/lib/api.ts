@@ -84,6 +84,8 @@ export const keys = {
 	host: ['host'] as const,
 	vms: ['vms'] as const,
 	vm: (id: string) => ['vms', id] as const,
+	pools: ['pools'] as const,
+	pool: (id: string) => ['pools', id] as const,
 	session: ['session'] as const,
 	setup: ['setup'] as const,
 	accounts: ['accounts'] as const,
@@ -286,6 +288,79 @@ export const fetchAccounts = (fetcher?: typeof fetch) =>
 
 export const fetchHost = (fetcher?: typeof fetch) => getJson<Host>('/api/host', fetcher);
 export const fetchVms = (fetcher?: typeof fetch) => getJson<Vm[]>('/api/vms', fetcher);
+
+/** The state of a storage pool (`crates/lodger-core/src/model/pool.rs`). */
+export type PoolState =
+	'inactive' | 'building' | 'running' | 'degraded' | 'inaccessible' | 'unknown';
+
+/** A storage pool, as `GET /api/pools` lists it. */
+export interface Pool {
+	uuid: string;
+	name: string;
+	state: PoolState;
+	/** Sizes in bytes. libvirt reports 0 for an inactive pool. */
+	capacity_bytes: number;
+	allocation_bytes: number;
+	available_bytes: number;
+	persistent: boolean;
+	autostart: boolean;
+}
+
+/** One pool with its type, folder, NFS source, and users (`crates/lodger/src/pools.rs`). */
+export interface PoolDetail extends Pool {
+	/** libvirt's pool type, such as `dir` or `netfs`. */
+	kind: string | null;
+	path: string | null;
+	nfs?: { host: string; export: string };
+	/** The VMs with a disk in the pool. */
+	used_by: string[];
+}
+
+export const fetchPools = (fetcher?: typeof fetch) => getJson<Pool[]>('/api/pools', fetcher);
+export const fetchPool = (id: string, fetcher?: typeof fetch) =>
+	getJson<PoolDetail>(`/api/pools/${id}`, fetcher);
+
+/** A new pool. `path` is required for `dir` and optional for `nfs`. */
+export type NewPool =
+	| { kind: 'dir'; name: string; path: string; autostart: boolean }
+	| { kind: 'nfs'; name: string; host: string; export: string; path?: string; autostart: boolean };
+
+/** Creates, builds, and starts a pool, and returns its UUID. */
+export function createPool(
+	pool: NewPool,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<{ uuid: string }> {
+	return send<{ uuid: string }>('POST', '/api/pools', { body: pool, ...options });
+}
+
+/** Starts or stops a pool, or switches its autostart. */
+export function changePool(
+	id: string,
+	change: { active?: boolean; autostart?: boolean },
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('PATCH', `/api/pools/${id}`, { body: change, ...options });
+}
+
+/**
+ * Removes a pool. `confirm` is the pool's name as the user typed it. With
+ * `deleteFiles`, libvirt also deletes every volume in it.
+ */
+export function removePool(
+	id: string,
+	options: { confirm: string; deleteFiles: boolean; csrf?: string; fetcher?: typeof fetch }
+): Promise<null> {
+	return send<null>('DELETE', `/api/pools/${id}`, {
+		body: { confirm: options.confirm, delete_files: options.deleteFiles },
+		csrf: options.csrf,
+		fetcher: options.fetcher
+	});
+}
+
+/** A size in bytes, in the units of `formatKib`. */
+export function formatBytes(bytes: number): string {
+	return formatKib(bytes / 1024);
+}
 
 /**
  * Formats a rate in bytes per second, for example `1.5 MB/s`. It rounds before

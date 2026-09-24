@@ -13,6 +13,7 @@ mod config;
 mod console;
 mod db;
 mod passwords;
+mod pools;
 mod security;
 mod server;
 mod setup;

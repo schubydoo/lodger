@@ -33,7 +33,7 @@ use crate::server::AppState;
 const LIFECYCLE: &str = "vm.lifecycle";
 const EDITED: &str = "vm.edited";
 
-fn error(code: StatusCode, message: impl Into<String>) -> Response {
+pub(crate) fn error(code: StatusCode, message: impl Into<String>) -> Response {
     (code, Json(serde_json::json!({ "error": message.into() }))).into_response()
 }
 
@@ -295,7 +295,7 @@ async fn failure(
 
 /// The answer for a failed libvirt call, with the explanation of a known
 /// error.
-fn error_answer(code: StatusCode, e: &lodger_virt::Error) -> Response {
+pub(crate) fn error_answer(code: StatusCode, e: &lodger_virt::Error) -> Response {
     explained(code, e.to_string(), e.explanation())
 }
 

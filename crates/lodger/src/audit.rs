@@ -117,6 +117,13 @@ impl Entry {
         self
     }
 
+    /// The storage pool that the change touched.
+    pub fn target_pool(mut self, name: impl Into<String>) -> Self {
+        self.target_kind = Some("pool");
+        self.target = Some(name.into());
+        self
+    }
+
     /// The journald line.
     fn line(&self) -> String {
         let json = serde_json::to_string(self).expect("an entry always serializes");
