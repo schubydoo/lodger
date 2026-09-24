@@ -6,11 +6,10 @@
 # document-change` scaffolds one. Conventional-commit PR titles are still enforced
 # (pr-title.yml) for a clean squash history, but ignored for release purposes.
 #
-# The release PR half lives in .github/workflows/knope-prepare.yml, behind the
-# `KNOPE_ENABLED` repo variable. It stays `false` until the signed release pipeline
-# (knope-release.yml, with `assets` below) exists, so no release can ever publish
-# without its signed binaries. The changeset reminder (changeset-check.yml) runs
-# regardless, so fragments accumulate from the first code change.
+# The release PR half lives in .github/workflows/knope-prepare.yml, and the
+# publish half in knope-release.yml. Both wait for the `KNOPE_ENABLED` repo
+# variable. The changeset reminder (changeset-check.yml) runs regardless, so
+# fragments accumulate from the first code change.
 
 [package]
 # The workspace version in the root Cargo.toml. Anchored to line start so it hits
@@ -22,6 +21,15 @@ versioned_files = [
   "web/package.json",
 ]
 changelog = "CHANGELOG.md"
+
+# knope-release.yml builds, signs, and stages the archive, the SBOMs, the
+# checksums, the signature, and the provenance in dist/release-assets/ before
+# `knope release` runs. With `assets` set, the Release step creates the GitHub
+# Release as a draft, uploads every file under this glob, and only then
+# publishes it, which creates the tag. A fail-closed gate in knope-release.yml
+# makes sure that the full signed set is there first: knope fails only on a
+# globbed file that vanished, not on one that was never built.
+assets = "dist/release-assets/*"
 
 # A fragment's `default:` value picks both the changelog section and the version
 # bump. A custom type bumps patch.
