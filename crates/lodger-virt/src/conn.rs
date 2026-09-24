@@ -60,6 +60,12 @@ impl Error {
             if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool)))
     }
 
+    /// The cause and the fix of a known libvirt error (`errors.rs`). It
+    /// reads the whole text, which holds libvirt's message.
+    pub fn explanation(&self) -> Option<&'static crate::errors::Explanation> {
+        crate::errors::explain(&self.to_string())
+    }
+
     /// `true` when the object is in the wrong state for the call, for
     /// example a start of a running domain.
     pub fn is_invalid_operation(&self) -> bool {

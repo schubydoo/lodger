@@ -7,17 +7,10 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import Problem from '$lib/components/Problem.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import {
-		ApiError,
-		deleteVm,
-		keys,
-		problemText,
-		setAutostart,
-		type Session,
-		type Vm
-	} from '$lib/api';
+	import { ApiError, deleteVm, keys, setAutostart, type Session, type Vm } from '$lib/api';
 	import { lastDeletion } from '$lib/deletion.svelte';
 
 	let { vm }: { vm: Vm } = $props();
@@ -28,7 +21,8 @@
 	const canDelete = $derived(vm.state === 'shutoff' || vm.state === 'crashed');
 
 	let busy = $state<'autostart' | 'delete' | null>(null);
-	let problem = $state('');
+	/** The last failure, or `null`. */
+	let problem = $state<unknown>(null);
 	let deleting = $state(false);
 	let typed = $state('');
 	let removeVolumes = $state(false);
@@ -47,12 +41,12 @@
 	function failed(e: unknown) {
 		// A 401 means that the session ended: the app shell then shows the login.
 		if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
-		problem = problemText(e);
+		problem = e;
 	}
 
 	async function toggleAutostart() {
 		if (busy) return;
-		problem = '';
+		problem = null;
 		busy = 'autostart';
 		try {
 			await setAutostart(vm.uuid, !vm.autostart, { csrf: csrf() });
@@ -66,7 +60,7 @@
 	async function remove() {
 		// jsdom and fast clicks can reach a disabled button: check again.
 		if (busy || typed !== vm.name) return;
-		problem = '';
+		problem = null;
 		busy = 'delete';
 		try {
 			const removal = await deleteVm(vm.uuid, { confirm: typed, removeVolumes, csrf: csrf() });
@@ -134,7 +128,7 @@
 			Delete…
 		</Button>
 	{/if}
-	{#if problem}
-		<p role="alert" class="mt-2 text-sm text-destructive">{problem}</p>
+	{#if problem !== null}
+		<Problem error={problem} class="mt-2" />
 	{/if}
 </section>
