@@ -45,7 +45,22 @@
             "context": "ci required checks passed"
           },
           {
+            "context": "security required checks passed"
+          },
+          {
             "context": "conventional PR title"
+          }
+        ]
+      }
+    },
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "security_alerts_threshold": "high_or_higher",
+            "alerts_threshold": "errors"
           }
         ]
       }
