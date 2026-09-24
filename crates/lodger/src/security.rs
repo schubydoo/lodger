@@ -12,7 +12,8 @@
 //! because it needs the session.
 //!
 //! Every response gets the Content Security Policy, `Referrer-Policy`, and
-//! `X-Content-Type-Options`. The CSP allows the one inline script of the
+//! `X-Content-Type-Options`. When Lodger serves HTTPS itself, every response
+//! also gets `Strict-Transport-Security`. The CSP allows the one inline script of the
 //! fallback page by its SHA-256 hash, which Lodger computes from the embedded
 //! page at start. So the hash always matches the page that Lodger serves.
 
@@ -153,7 +154,9 @@ pub async fn add_headers(State(state): State<AppState>, req: Request, next: Next
     );
     // ASVS 3.4.1: at least one year. A browser ignores the header on an IP
     // address and on a connection with a certificate error, so a
-    // self-signed certificate stays usable.
+    // self-signed certificate stays usable. The policy covers the host name
+    // on every port, so a browser that trusts the certificate also upgrades a
+    // plain-HTTP service on the same name.
     if state.hsts {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
