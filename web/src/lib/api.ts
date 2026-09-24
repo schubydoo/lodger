@@ -89,6 +89,8 @@ export const keys = {
 	hostBridges: ['host-bridges'] as const,
 	pools: ['pools'] as const,
 	pool: (id: string) => ['pools', id] as const,
+	/** Below the pool's key, so a pool event refreshes its volumes too. */
+	volumes: (poolId: string) => ['pools', poolId, 'volumes'] as const,
 	session: ['session'] as const,
 	setup: ['setup'] as const,
 	accounts: ['accounts'] as const,
@@ -421,6 +423,56 @@ export function removePool(
 		csrf: options.csrf,
 		fetcher: options.fetcher
 	});
+}
+
+/** One volume of a pool (`crates/lodger-core/src/model/volume.rs`). */
+export interface Volume {
+	name: string;
+	key: string;
+	path: string;
+	kind: string;
+	/** The disk format, such as `qcow2` or `raw`. */
+	format: string | null;
+	/** The size that the guest sees. */
+	capacity_bytes: number;
+	/** The space that the volume takes on the host. */
+	allocation_bytes: number;
+	/** The VMs with a disk on this volume. */
+	used_by: string[];
+	/** The qcow2 overlays in the same pool that use this volume as their backing file. */
+	backing_for: string[];
+}
+
+/** The volumes of a running pool, sorted by name. */
+export const fetchVolumes = (poolId: string, fetcher?: typeof fetch) =>
+	getJson<Volume[]>(`/api/pools/${poolId}/volumes`, fetcher);
+
+/** A new volume. The server allows 1 MiB to 1 PiB. */
+export interface NewVolume {
+	name: string;
+	format: 'qcow2' | 'raw';
+	capacity_bytes: number;
+}
+
+/** Creates a volume in a running pool. */
+export function createVolume(
+	poolId: string,
+	volume: NewVolume,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<{ name: string }> {
+	return send<{ name: string }>('POST', `/api/pools/${poolId}/volumes`, {
+		body: volume,
+		...options
+	});
+}
+
+/** Deletes a volume. The server refuses one that a VM uses, and names the VMs. */
+export function deleteVolume(
+	poolId: string,
+	name: string,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('DELETE', `/api/pools/${poolId}/volumes/${encodeURIComponent(name)}`, options);
 }
 
 /** A size in bytes, in the units of `formatKib`. */
