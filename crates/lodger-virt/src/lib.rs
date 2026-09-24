@@ -6,6 +6,7 @@ mod console;
 mod delete;
 mod errors;
 mod events;
+mod pool;
 mod power;
 mod stats;
 mod supervisor;

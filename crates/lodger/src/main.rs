@@ -15,6 +15,7 @@ mod db;
 mod doctor;
 mod install;
 mod passwords;
+mod pools;
 mod security;
 mod server;
 mod setup;
