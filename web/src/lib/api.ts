@@ -201,16 +201,19 @@ export const fetchAccounts = (fetcher?: typeof fetch) =>
 export const fetchHost = (fetcher?: typeof fetch) => getJson<Host>('/api/host', fetcher);
 export const fetchVms = (fetcher?: typeof fetch) => getJson<Vm[]>('/api/vms', fetcher);
 
-/** Formats a rate in bytes per second, for example `1.5 MB/s`. */
+/**
+ * Formats a rate in bytes per second, for example `1.5 MB/s`. It rounds before
+ * it picks the unit, so 999,950 B/s shows as `1 MB/s`, not `1000 kB/s`.
+ */
 export function formatRate(bytesPerSecond: number): string {
 	const units = ['B/s', 'kB/s', 'MB/s', 'GB/s'];
-	let value = bytesPerSecond;
+	const round = (v: number, unit: number) => (unit === 0 ? Math.round(v) : Number(v.toFixed(1)));
 	let unit = 0;
-	while (value >= 1000 && unit < units.length - 1) {
-		value /= 1000;
+	let rounded = round(bytesPerSecond, 0);
+	while (rounded >= 1000 && unit < units.length - 1) {
 		unit += 1;
+		rounded = round(bytesPerSecond / 1000 ** unit, unit);
 	}
-	const rounded = unit === 0 ? Math.round(value) : Number(value.toFixed(1));
 	return `${rounded} ${units[unit]}`;
 }
 
