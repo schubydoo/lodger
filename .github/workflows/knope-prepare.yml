@@ -4,7 +4,7 @@ name: Prepare Release
 # warrant a release, knope bumps the version + CHANGELOG, resyncs Cargo.lock,
 # force-pushes the `release` branch, and opens/refreshes a
 # `chore: prepare release X.Y.Z` PR. Merging that PR triggers knope-release.yml,
-# which arrives with the signed release pipeline. Until then KNOPE_ENABLED stays false.
+# which builds, signs, and publishes the release.
 #
 # workflow_dispatch with `override_version` forces a specific version instead of the
 # changeset-computed one — how a pinned release is cut. Blank input = normal bump.
