@@ -134,6 +134,30 @@ fn disk(element: &Element) -> Option<Disk> {
     })
 }
 
+/// The names of the libvirt networks that the NICs of a domain use:
+/// `<interface type="network">` with a `<source network="...">`. Each name
+/// appears once, in the order of the first NIC that uses it.
+pub fn domain_networks(xml: &str) -> Result<Vec<String>, XmlError> {
+    let domain = parse(xml, "domain")?;
+    let Some(devices) = domain.get_child("devices") else {
+        return Ok(Vec::new());
+    };
+    let mut names: Vec<String> = Vec::new();
+    for nic in devices
+        .children
+        .iter()
+        .filter_map(XMLNode::as_element)
+        .filter(|e| e.name == "interface" && attr(e, "type") == Some("network"))
+    {
+        if let Some(name) = nic.get_child("source").and_then(|s| attr(s, "network"))
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
 fn attr<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
     element.attributes.get(name).map(String::as_str)
 }
@@ -216,6 +240,26 @@ mod tests {
         let xml = r#"<domain><devices><disk type="file" device="disk">
             <source file="/base.img"/><readonly/></disk></devices></domain>"#;
         assert!(domain_disks(xml).unwrap()[0].shared);
+    }
+
+    #[test]
+    fn the_networks_of_the_nics_are_read_once_each() {
+        let xml = r#"<domain><devices>
+            <interface type="network"><source network="lab"/><model type="virtio"/></interface>
+            <interface type="bridge"><source bridge="br0"/></interface>
+            <interface type="network"><source network="default"/></interface>
+            <interface type="network"><source network="lab"/></interface>
+            <interface type="network"/>
+            </devices></domain>"#;
+        assert_eq!(
+            domain_networks(xml),
+            Ok(vec!["lab".into(), "default".into()])
+        );
+        assert_eq!(domain_networks("<domain/>"), Ok(vec![]));
+        assert_eq!(
+            domain_networks("<pool/>").unwrap_err().to_string(),
+            "the XML root is <pool>, not <domain>"
+        );
     }
 
     #[test]

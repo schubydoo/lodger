@@ -505,13 +505,18 @@ mod tests {
         install(&host, &exe, &mut run).unwrap();
     }
 
+    /// An address where nothing can listen: a connection to port 0 is always
+    /// refused. A freed port is no such address, because a parallel test can
+    /// bind it again at once.
+    fn nobody_listens() -> SocketAddr {
+        "127.0.0.1:0".parse().unwrap()
+    }
+
     #[test]
     fn the_system_runner_sees_a_listener() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        assert!(System.accepts(addr));
-        drop(listener);
-        assert!(!System.accepts(addr));
+        assert!(System.accepts(listener.local_addr().unwrap()));
+        assert!(!System.accepts(nobody_listens()));
     }
 
     #[test]
@@ -741,11 +746,9 @@ mod tests {
     #[test]
     fn wait_listening_returns_once_the_port_accepts() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        wait_listening(addr, Duration::from_secs(5)).unwrap();
-        drop(listener);
+        wait_listening(listener.local_addr().unwrap(), Duration::from_secs(5)).unwrap();
         let started = Instant::now();
-        let err = wait_listening(addr, Duration::from_millis(300)).unwrap_err();
+        let err = wait_listening(nobody_listens(), Duration::from_millis(300)).unwrap_err();
         assert!(err.contains("journalctl -u lodger"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(3));
     }
