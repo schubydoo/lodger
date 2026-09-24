@@ -1,5 +1,6 @@
 # Gitleaks configuration. The `secret scan` job in .github/workflows/security.yml
-# reads it from the repository root. The scan covers the full history.
+# reads it from the repository root. A pull request or push run scans the new
+# commits, and the weekly run scans the full history.
 #
 # The allowlist holds only fake values from tests, each matched exactly.
 # `0123456789abcdef0123456789abcdef` is the fake setup token in the Debug-output

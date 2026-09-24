@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # full history so the scan covers every commit
+          fetch-depth: 0 # the PR and push ranges need the history; the weekly run scans all of it
           persist-credentials: false
       # lodger-ci App token (>=5,000 REST req/hr), so that the action's
       # GitHub API calls do not exhaust the 1,000/hr github-actions[bot] pool.
