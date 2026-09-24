@@ -200,3 +200,43 @@ describe('a guest that ignores the ACPI request', () => {
 		expect(await screen.findByRole('status')).toHaveTextContent('Shutdown requested.');
 	});
 });
+
+describe('a known libvirt error', () => {
+	it('shows the AppArmor rule and its 2 commands for the getfd error', async () => {
+		show(
+			running,
+			() =>
+				new Response(
+					JSON.stringify({
+						error:
+							"libvirt: internal error: unable to execute QEMU command 'getfd': No file descriptor supplied via SCM_RIGHTS",
+						cause: 'AppArmor on this host blocks /dev/vhost-net.',
+						fix: 'Add the rule `/dev/vhost-net rw,` to /etc/apparmor.d/local/abstractions/libvirt-qemu.',
+						commands: [
+							'sudo mkdir -p /etc/apparmor.d/local/abstractions',
+							'printf x | sudo tee -a y'
+						]
+					}),
+					{ status: 502 }
+				)
+		);
+		await fireEvent.click(button('Reboot alpha'));
+		const alert = await screen.findByRole('alert');
+		expect(alert).toHaveTextContent('Add the rule `/dev/vhost-net rw,`');
+		expect(screen.getByLabelText('Commands to run on the host').textContent).toBe(
+			'sudo mkdir -p /etc/apparmor.d/local/abstractions\nprintf x | sudo tee -a y'
+		);
+	});
+
+	it('ignores an explanation with a missing part', async () => {
+		show(
+			running,
+			() =>
+				new Response(JSON.stringify({ error: 'the VM is paused', cause: 'x', commands: [] }), {
+					status: 409
+				})
+		);
+		await fireEvent.click(button('Reboot alpha'));
+		expect((await screen.findByRole('alert')).textContent?.trim()).toBe('The VM is paused.');
+	});
+});

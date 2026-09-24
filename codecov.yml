@@ -121,6 +121,7 @@ component_management:
         - crates/lodger-virt/src/cache.rs
         - crates/lodger-virt/src/conn.rs
         - crates/lodger-virt/src/delete.rs
+        - crates/lodger-virt/src/errors.rs
         - crates/lodger-virt/src/console.rs
         - crates/lodger-virt/src/events/mod.rs
         - crates/lodger-virt/src/power.rs
