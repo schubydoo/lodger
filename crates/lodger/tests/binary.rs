@@ -646,7 +646,9 @@ fn serve_answers_https_with_the_configured_pair() {
     plain
         .set_read_timeout(Some(std::time::Duration::from_secs(20)))
         .unwrap();
-    write!(plain, "GET /api/health HTTP/1.1\r\nHost: {addr}\r\n\r\n").unwrap();
+    // The server closes as soon as the first bytes are not TLS, so this write
+    // can fail with a broken pipe. That close is the behavior under test.
+    let _ = write!(plain, "GET /api/health HTTP/1.1\r\nHost: {addr}\r\n\r\n");
     let mut out = Vec::new();
     let _ = plain.read_to_end(&mut out);
     assert!(

@@ -71,7 +71,11 @@ impl Check {
 pub fn run(overrides: Overrides) -> Result<String, String> {
     let config = Config::load(overrides, None)?;
     let mut checks = host_checks(Path::new("/"));
-    checks.push(tls_certificate(config.tls.as_ref(), SystemTime::now()));
+    checks.push(tls_certificate(
+        Path::new("/"),
+        config.tls.as_ref(),
+        SystemTime::now(),
+    ));
     checks.extend(
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -88,12 +92,16 @@ pub fn run(overrides: Overrides) -> Result<String, String> {
     }
 }
 
-/// The built-in TLS pair: it must load, and it must not expire within
-/// `TLS_WARNING`.
-fn tls_certificate(tls: Option<&TlsFiles>, now: SystemTime) -> Check {
+/// The built-in TLS pair: it must load, the lodger user must be able to read
+/// it, and it must not expire within `TLS_WARNING`.
+fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Check {
     const NAME: &str = "TLS certificate";
     const FIX: &str = "replace the certificate and key named by tls_cert and tls_key in \
                        /etc/lodger/config.toml, then run: sudo systemctl restart lodger";
+    const READ_FIX: &str = "copy the pair to /etc/lodger/tls/, give the key to the lodger \
+                            user (sudo chown lodger: key.pem, sudo chmod 0600 key.pem), set \
+                            tls_cert and tls_key to the copies, then run: sudo systemctl \
+                            restart lodger";
     let Some(files) = tls else {
         return Check::skip(
             NAME,
@@ -102,6 +110,15 @@ fn tls_certificate(tls: Option<&TlsFiles>, now: SystemTime) -> Check {
     };
     if let Err(e) = crate::tls::server_config(files) {
         return Check::fail(NAME, e, &[FIX]);
+    }
+    // doctor often runs as root, which reads any file, but the service runs as
+    // the lodger user. Without that user, the group check already fails.
+    if let Some(account) = service_account(root) {
+        for path in [&files.cert, &files.key] {
+            if let Some(why) = unreadable(path, &account) {
+                return Check::fail(NAME, why, &[READ_FIX]);
+            }
+        }
     }
     let not_after = match crate::tls::not_after(&files.cert) {
         Ok(t) => t,
@@ -245,6 +262,74 @@ fn selinux(root: &Path) -> Check {
             "virt_use_nfs is off, so VMs cannot use disks on NFS. Ignore this if no storage pool is on NFS",
             &["sudo setsebool -P virt_use_nfs 1"],
         )
+    }
+}
+
+/// The IDs that the service runs with.
+struct Account {
+    uid: u32,
+    /// The primary group and every group that lists the lodger user.
+    gids: Vec<u32>,
+}
+
+/// The lodger user's IDs from the files below `root`, if the user exists.
+fn service_account(root: &Path) -> Option<Account> {
+    let read = |file| std::fs::read_to_string(root.join(file)).unwrap_or_default();
+    let (users, groups) = (read(PASSWD_FILE), read(GROUP_FILE));
+    let user = entry(&users, "lodger")?;
+    let mut gids = vec![user.get(3)?.parse().ok()?];
+    for line in groups.lines() {
+        let fields: Vec<_> = line.split(':').collect();
+        let listed = fields
+            .get(3)
+            .is_some_and(|members| members.split(',').any(|m| m == "lodger"));
+        if listed && let Some(gid) = fields.get(2).and_then(|g| g.parse().ok()) {
+            gids.push(gid);
+        }
+    }
+    Some(Account {
+        uid: user.get(2)?.parse().ok()?,
+        gids,
+    })
+}
+
+/// Why `account` cannot read `path`, from the mode bits of the file and of
+/// each folder above it, or `None` if it can. Access control lists are not
+/// read.
+fn unreadable(path: &Path, account: &Account) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    // The owner bits apply to the owner, even if the group bits would allow.
+    let allows = |meta: &std::fs::Metadata, owner: u32, group: u32, other: u32| {
+        let bit = if meta.uid() == account.uid {
+            owner
+        } else if account.gids.contains(&meta.gid()) {
+            group
+        } else {
+            other
+        };
+        meta.mode() & bit != 0
+    };
+    for dir in path
+        .ancestors()
+        .skip(1)
+        .filter(|d| !d.as_os_str().is_empty())
+    {
+        match std::fs::metadata(dir) {
+            Ok(meta) if allows(&meta, 0o100, 0o010, 0o001) => {}
+            Ok(_) => {
+                return Some(format!(
+                    "the lodger user cannot open the folder {}, so it cannot read {}",
+                    dir.display(),
+                    path.display()
+                ));
+            }
+            Err(e) => return Some(format!("cannot read {}: {e}", dir.display())),
+        }
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if allows(&meta, 0o400, 0o040, 0o004) => None,
+        Ok(_) => Some(format!("the lodger user cannot read {}", path.display())),
+        Err(e) => Some(format!("cannot read {}: {e}", path.display())),
     }
 }
 
@@ -566,7 +651,7 @@ mod tests {
 
     #[test]
     fn tls_is_skipped_when_off() {
-        let check = tls_certificate(None, SystemTime::now());
+        let check = tls_certificate(Path::new("/nonexistent"), None, SystemTime::now());
         assert_eq!(check.outcome, Outcome::Skip, "{}", check.reason);
     }
 
@@ -576,7 +661,7 @@ mod tests {
         let files = crate::tls::test_pair::write(dir.path(), "a", (2031, 1, 1));
         let end = crate::tls::not_after(&files.cert).unwrap().to_system_time();
 
-        let early = tls_certificate(Some(&files), end - 31 * DAY);
+        let early = tls_certificate(Path::new("/nonexistent"), Some(&files), end - 31 * DAY);
         assert_eq!(early.outcome, Outcome::Pass, "{}", early.reason);
         assert!(
             early
@@ -587,7 +672,7 @@ mod tests {
         );
 
         for now in [end - 30 * DAY, end - DAY] {
-            let soon = tls_certificate(Some(&files), now);
+            let soon = tls_certificate(Path::new("/nonexistent"), Some(&files), now);
             assert_eq!(soon.outcome, Outcome::Fail, "{}", soon.reason);
             assert!(
                 soon.reason.contains("in less than 30 days"),
@@ -597,7 +682,7 @@ mod tests {
             assert!(soon.fix[0].contains("sudo systemctl restart lodger"));
         }
 
-        let late = tls_certificate(Some(&files), end + DAY);
+        let late = tls_certificate(Path::new("/nonexistent"), Some(&files), end + DAY);
         assert_eq!(late.outcome, Outcome::Fail, "{}", late.reason);
         assert!(
             late.reason.ends_with("expired on 2031-01-01T00:00:00Z"),
@@ -615,12 +700,81 @@ mod tests {
             cert: a.cert,
             key: b.key,
         };
-        let check = tls_certificate(Some(&mixed), SystemTime::now());
+        let check = tls_certificate(Path::new("/nonexistent"), Some(&mixed), SystemTime::now());
         assert_eq!(check.outcome, Outcome::Fail, "{}", check.reason);
         assert!(
             check.reason.starts_with("cannot use the TLS certificate"),
             "{}",
             check.reason
         );
+    }
+
+    #[test]
+    fn tls_fails_when_the_lodger_user_cannot_read_the_pair() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let set = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("tls");
+        std::fs::create_dir(&folder).unwrap();
+        set(dir.path(), 0o755);
+        set(&folder, 0o755);
+        let files = crate::tls::test_pair::write(&folder, "a", (2031, 1, 1));
+        set(&files.cert, 0o644);
+        let key = std::fs::metadata(&files.key).unwrap();
+        let check = |host: &tempfile::TempDir| {
+            tls_certificate(host.path(), Some(&files), SystemTime::UNIX_EPOCH)
+        };
+        // The lodger user is another user, in none of the key's groups.
+        let other = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+
+        set(&files.key, 0o600);
+        let c = check(&other);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(
+            c.reason.starts_with("the lodger user cannot read "),
+            "{}",
+            c.reason
+        );
+        assert!(c.reason.ends_with("a.key"), "{}", c.reason);
+        assert!(
+            c.fix[0].contains("sudo chown lodger: key.pem"),
+            "{:?}",
+            c.fix
+        );
+
+        set(&files.key, 0o644);
+        assert_eq!(check(&other).outcome, Outcome::Pass);
+
+        // A folder above that the user cannot open, like certbot's live folder.
+        set(&folder, 0o700);
+        let c = check(&other);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(c.reason.contains("cannot open the folder"), "{}", c.reason);
+        set(&folder, 0o755);
+
+        // The group bits apply to a member of the key's group.
+        set(&files.key, 0o640);
+        assert_eq!(check(&other).outcome, Outcome::Fail);
+        let member = format!("keys:x:{}:alice,lodger\n", key.gid());
+        let in_group = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, &member),
+        ]);
+        assert_eq!(check(&in_group).outcome, Outcome::Pass);
+
+        // The owner bits apply to the owner.
+        set(&files.key, 0o600);
+        let owner = format!("lodger:x:{}:4242::/:/x\n", key.uid());
+        let as_owner = root(&[(PASSWD_FILE, &owner), (GROUP_FILE, "")]);
+        assert_eq!(check(&as_owner).outcome, Outcome::Pass);
+
+        // Without a lodger user, the group check reports it; this one does not.
+        let none = root(&[]);
+        assert_eq!(check(&none).outcome, Outcome::Pass);
     }
 }
