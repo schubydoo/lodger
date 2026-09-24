@@ -78,6 +78,7 @@
 		{ href: resolve('/'), label: 'Overview' },
 		{ href: resolve('/vms'), label: 'Virtual machines' },
 		{ href: resolve('/storage'), label: 'Storage' },
+		{ href: resolve('/networks'), label: 'Networks' },
 		{ href: resolve('/account'), label: 'Account' }
 	];
 </script>

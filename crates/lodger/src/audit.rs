@@ -124,6 +124,13 @@ impl Entry {
         self
     }
 
+    /// The virtual network that the change touched.
+    pub fn target_network(mut self, name: impl Into<String>) -> Self {
+        self.target_kind = Some("network");
+        self.target = Some(name.into());
+        self
+    }
+
     /// The journald line.
     fn line(&self) -> String {
         let json = serde_json::to_string(self).expect("an entry always serializes");

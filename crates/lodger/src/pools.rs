@@ -26,10 +26,16 @@ use lodger_core::xml::pool::{NewPool, PoolXml};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::actions::{error, error_answer};
+use crate::actions::{NotFound, audited, bad_json, error, error_answer, no_libvirt};
 use crate::audit::{self, Entry};
 use crate::db::Session;
 use crate::server::AppState;
+
+/// The answer and the audit reason when libvirt has no such pool.
+const NOT_FOUND: NotFound = NotFound {
+    reason: "no_such_pool",
+    message: "no such pool",
+};
 
 /// Where Lodger mounts an NFS pool when the request names no folder.
 const NFS_MOUNT_ROOT: &str = "/var/lib/libvirt/pools";
@@ -98,17 +104,6 @@ pub struct Removal {
     pub confirm: Option<String>,
     #[serde(default)]
     pub delete_files: bool,
-}
-
-fn no_libvirt() -> Response {
-    error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Lodger is not connected to libvirt",
-    )
-}
-
-fn bad_json(e: &serde_json::Error) -> Response {
-    error(StatusCode::BAD_REQUEST, format!("bad JSON body: {e}"))
 }
 
 /// `GET /api/pools`.
@@ -287,7 +282,7 @@ pub async fn change(
         } else {
             "pool.stopped"
         };
-        if let Err(response) = audited(&state, row, event, None, async {
+        if let Err(response) = audited(&state, NOT_FOUND, row, event, None, async {
             virt.set_pool_active(id, active).await
         })
         .await
@@ -297,7 +292,7 @@ pub async fn change(
     }
     if let Some(on) = change.autostart {
         let action = if on { "autostart-on" } else { "autostart-off" };
-        if let Err(response) = audited(&state, row, "pool.edited", Some(action), async {
+        if let Err(response) = audited(&state, NOT_FOUND, row, "pool.edited", Some(action), async {
             virt.set_pool_autostart(id, on).await
         })
         .await
@@ -349,49 +344,17 @@ pub async fn remove(
     } else {
         "keep-files"
     };
-    match audited(&state, row, "pool.deleted", Some(action), async {
-        virt.remove_pool(id, request.delete_files).await
-    })
+    match audited(
+        &state,
+        NOT_FOUND,
+        row,
+        "pool.deleted",
+        Some(action),
+        async { virt.remove_pool(id, request.delete_files).await },
+    )
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => *response,
-    }
-}
-
-/// Runs one libvirt call and writes its audit row, with a fixed reason code
-/// on failure. The error is the answer to send.
-async fn audited(
-    state: &AppState,
-    row: impl Fn(Entry) -> Entry,
-    event: &'static str,
-    action: Option<&'static str>,
-    call: impl Future<Output = Result<(), lodger_virt::Error>>,
-) -> Result<(), Box<Response>> {
-    let with_action = |mut entry: Entry| {
-        entry.detail.action = action;
-        row(entry)
-    };
-    match call.await {
-        Ok(()) => {
-            audit::log(&state.db, with_action(Entry::ok(event))).await;
-            Ok(())
-        }
-        Err(e) => {
-            let (reason, code) = if e.is_not_found() {
-                ("no_such_pool", StatusCode::NOT_FOUND)
-            } else if e.is_invalid_operation() {
-                ("wrong_state", StatusCode::CONFLICT)
-            } else {
-                eprintln!("lodger: {event}: {e}");
-                ("libvirt_error", StatusCode::BAD_GATEWAY)
-            };
-            audit::log(&state.db, with_action(Entry::failed(event, reason))).await;
-            Err(Box::new(if reason == "no_such_pool" {
-                error(code, "no such pool")
-            } else {
-                error_answer(code, &e)
-            }))
-        }
     }
 }

@@ -56,8 +56,10 @@ export function invalidationsFor(update: Update): (readonly unknown[])[] | 'all'
 		// `pools` also covers every pool's own page.
 		case 'pool':
 			return [keys.pools, keys.host];
+		// A network change can move the host's network count too. The prefix
+		// `networks` also covers every network's own page.
 		case 'network':
-			return [keys.host];
+			return [keys.networks, keys.host];
 		case 'connection':
 			return [keys.host];
 		case 'resync':

@@ -19,7 +19,7 @@ use crate::setup::{self, Setup, SetupToken};
 use crate::stats::Stats;
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
-use crate::{accounts, actions, api, auth, console, pools, security, ws};
+use crate::{accounts, actions, api, auth, console, networks, pools, security, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -93,6 +93,14 @@ pub fn router(state: AppState) -> Router {
                 .patch(pools::change)
                 .delete(pools::remove),
         )
+        .route("/api/networks", get(networks::list).post(networks::create))
+        .route(
+            "/api/networks/{id}",
+            get(networks::detail)
+                .patch(networks::change)
+                .delete(networks::remove),
+        )
+        .route("/api/host-bridges", get(networks::host_bridges))
         .route("/api/session", get(auth::current).delete(auth::logout))
         .route("/api/ws-tickets", post(auth::issue_ticket))
         .route("/api/accounts", get(accounts::list).post(accounts::create))
@@ -1545,6 +1553,183 @@ mod tests {
                     "ok",
                     r#"{"action":"delete-files"}"#
                 ),
+            ]
+        );
+    }
+
+    /// Network `id` as the API reports it, polled until `done` accepts it or
+    /// 5 seconds pass. Returns the last answer.
+    async fn wait_for_network(
+        addr: &str,
+        tab: &Tab,
+        id: &str,
+        done: impl Fn(u16, &Value) -> bool,
+    ) -> (u16, Value) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let url = format!("/api/networks/{id}");
+            let (status, network) = call(addr, tab, "GET", &url, None).await;
+            if done(status, &network) || Instant::now() > deadline {
+                return (status, network);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn networks_are_created_changed_deleted_and_audited() {
+        let (addr, token, state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let name = "lodger-spike-net-api";
+        let create = serde_json::json!({ "name": name, "mode": "nat", "subnet": "10.211.0.0/24" });
+        let (status, answer) =
+            call(&addr, &tab, "POST", "/api/networks", Some(create.clone())).await;
+        assert_eq!(status, 201, "{answer}");
+        let id = answer["uuid"].as_str().unwrap().to_owned();
+        let (status, network) = wait_for_network(&addr, &tab, &id, |s, _| s == 200).await;
+        assert_eq!(status, 200, "{network}");
+        assert_eq!(network["name"], name);
+        assert_eq!(network["active"], true);
+        assert_eq!(network["autostart"], true);
+        assert_eq!(network["mode"], "nat");
+        assert_eq!(network["subnets"], serde_json::json!(["10.211.0.0/24"]));
+        assert_eq!(network["used_by"], serde_json::json!([]));
+        let (_, list) = call(&addr, &tab, "GET", "/api/networks", None).await;
+        assert!(list.as_array().unwrap().iter().any(|n| n["name"] == name));
+        let (status, bridges) = call(&addr, &tab, "GET", "/api/host-bridges", None).await;
+        assert_eq!(status, 200);
+        assert!(bridges.is_array(), "{bridges}");
+
+        // Rejected before any change.
+        let rejects = [
+            (create.clone(), 409, "exists already"),
+            (
+                serde_json::json!({ "name": "lodger-spike-net-api2", "mode": "isolated", "subnet": "10.211.0.128/25" }),
+                422,
+                "which network \"lodger-spike-net-api\" uses",
+            ),
+            (
+                serde_json::json!({ "name": "n2", "mode": "bridge", "bridge": "lodgernobr0" }),
+                422,
+                "A host bridge must exist first",
+            ),
+            (
+                serde_json::json!({ "name": "n2", "mode": "nat" }),
+                422,
+                "Subnet is empty",
+            ),
+            (
+                serde_json::json!({ "name": "n2", "mode": "bridge" }),
+                422,
+                "Host bridge is empty",
+            ),
+            (
+                serde_json::json!({ "name": "n2", "mode": "nat", "subnet": "8.8.8.0/24" }),
+                422,
+                "10.0.0.0/8",
+            ),
+            (
+                serde_json::json!({ "name": "n 2", "mode": "nat", "subnet": "10.212.0.0/24" }),
+                422,
+                "Network name",
+            ),
+            (
+                serde_json::json!({ "name": "n2", "mode": "macvtap" }),
+                400,
+                "bad JSON",
+            ),
+        ];
+        for (body, want, text) in rejects {
+            let (status, answer) =
+                call(&addr, &tab, "POST", "/api/networks", Some(body.clone())).await;
+            assert_eq!(status, want, "{body}: {answer}");
+            let message = answer["error"].as_str().unwrap_or_default();
+            assert!(message.contains(text), "{body}: {message}");
+        }
+
+        // A VM with a NIC on the network shows as a user.
+        let outside = Virt::open(TEST_URI).await.unwrap();
+        outside
+            .job(move |c| {
+                let xml = format!(
+                    "<domain type='test'><name>lodger-spike-net-user</name><memory>1024</memory>\
+                     <os><type>hvm</type></os><devices><interface type='network'>\
+                     <source network='{name}'/></interface></devices></domain>"
+                );
+                c.define_domain_xml(&xml).map(drop)
+            })
+            .await
+            .unwrap();
+        let url = format!("/api/networks/{id}");
+        let (_, network) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(
+            network["used_by"],
+            serde_json::json!(["lodger-spike-net-user"])
+        );
+
+        // Stop, autostart off, and the wrong state.
+        let stop = serde_json::json!({ "active": false, "autostart": false });
+        assert_eq!(call(&addr, &tab, "PATCH", &url, Some(stop)).await.0, 204);
+        let (_, network) = wait_for_network(&addr, &tab, &id, |_, n| {
+            n["active"] == false && n["autostart"] == false
+        })
+        .await;
+        assert_eq!(network["active"], false);
+        assert_eq!(network["autostart"], false);
+        let again = serde_json::json!({ "active": false });
+        let (status, answer) = call(&addr, &tab, "PATCH", &url, Some(again)).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("the network is not running"))
+        );
+        assert_eq!(
+            call(&addr, &tab, "PATCH", &url, Some(serde_json::json!({})))
+                .await
+                .0,
+            400
+        );
+
+        // Delete needs the typed name.
+        for body in [
+            None,
+            Some(serde_json::json!({ "confirm": "LODGER-SPIKE-NET-API" })),
+        ] {
+            assert_eq!(call(&addr, &tab, "DELETE", &url, body).await.0, 422);
+        }
+        let confirm = serde_json::json!({ "confirm": name });
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &url, Some(confirm.clone()))
+                .await
+                .0,
+            204
+        );
+        let (status, _) = wait_for_network(&addr, &tab, &id, |s, _| s == 404).await;
+        assert_eq!(status, 404);
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &url, Some(confirm)).await.0,
+            404
+        );
+        let no_session = raw(&addr, "GET", "/api/networks", &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(no_session.0, 401);
+
+        let lines = audit_lines(&state).await;
+        let rows: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("network."))
+            .map(String::as_str)
+            .collect();
+        let row = |event: &str, result: &str, detail: &str| {
+            format!("{event} admin 127.0.0.1 {name} {result} {detail}")
+        };
+        assert_eq!(
+            rows,
+            [
+                row("network.created", "ok", "-"),
+                row("network.stopped", "ok", "-"),
+                row("network.edited", "ok", r#"{"action":"autostart-off"}"#),
+                row("network.stopped", "failed", r#"{"reason":"wrong_state"}"#),
+                row("network.deleted", "ok", "-"),
             ]
         );
     }
