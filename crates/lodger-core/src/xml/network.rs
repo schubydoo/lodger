@@ -2,7 +2,7 @@
 //! network, and read any network that libvirt returns.
 //!
 //! [`NetworkXml`] keeps the whole document, so writing it back keeps every
-//! element that Lodger does not model, such as DNS hosts and DHCP leases.
+//! element that Lodger does not model, such as DNS hosts and DHCP host entries.
 //! libvirt accepts a network whose subnet overlaps another one and fails
 //! only when both start, so Lodger checks every new subnet itself.
 
