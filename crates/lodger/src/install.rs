@@ -47,9 +47,12 @@ const SERVICE: &str = "lodger.service";
 /// How long `install` waits for the service to listen.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Runs one program with a fixed argument list.
+/// What the commands do outside the file system. The tests replace it.
 pub trait Run {
+    /// Runs one program with a fixed argument list.
     fn run(&mut self, program: &str, args: &[&str]) -> Result<(), String>;
+    /// True if something accepts a connection on the address.
+    fn accepts(&mut self, addr: SocketAddr) -> bool;
 }
 
 /// Runs each program for real, with no shell.
@@ -66,6 +69,10 @@ impl Run for System {
         } else {
             Err(format!("{program} {} failed: {status}", args.join(" ")))
         }
+    }
+
+    fn accepts(&mut self, addr: SocketAddr) -> bool {
+        TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
     }
 }
 
@@ -113,7 +120,7 @@ pub fn run_uninstall(purge: bool) -> Result<String, String> {
 /// The checks run first, and a failed check changes nothing. An existing
 /// configuration file stays, because the operator may have changed it.
 fn install(host: &Host, exe: &Path, run: &mut impl Run) -> Result<SocketAddr, String> {
-    let listen = check(host)?;
+    let listen = check(host, run)?;
     copy_binary(exe, &host.path(BIN))?;
     write(&host.path(SYSUSERS_FILE), SYSUSERS.as_bytes(), 0o644)?;
     run.run("systemd-sysusers", &[&host.arg(SYSUSERS_FILE)])?;
@@ -131,7 +138,7 @@ fn install(host: &Host, exe: &Path, run: &mut impl Run) -> Result<SocketAddr, St
 
 /// Checks the host and returns the address that the service will listen on.
 /// A failure lists every problem, each with the step that fixes it.
-fn check(host: &Host) -> Result<SocketAddr, String> {
+fn check(host: &Host, run: &mut impl Run) -> Result<SocketAddr, String> {
     let mut problems = Vec::new();
     if !host.path(SYSTEMD_RUNNING).is_dir() {
         problems.push(
@@ -141,7 +148,7 @@ fn check(host: &Host) -> Result<SocketAddr, String> {
     }
     if !LIBVIRT_SOCKETS.iter().any(|s| host.path(s).exists()) {
         problems.push(
-            "there is no libvirt socket in /run/libvirt. Install libvirt, then start it: sudo systemctl enable --now libvirtd"
+            "there is no libvirt socket in /run/libvirt. Install libvirt, then start its socket: sudo systemctl enable --now libvirtd.socket, or virtqemud.socket on a host with the modular daemons"
                 .to_owned(),
         );
     }
@@ -173,6 +180,17 @@ fn check(host: &Host) -> Result<SocketAddr, String> {
                 .expect("the default listen address parses"),
         )
     };
+    // Before the first install, a listener on the address is another program.
+    // The service could not bind, but the wait after the start would connect
+    // to that program and report success.
+    if let Some(listen) = listen
+        && !host.path(UNIT_FILE).exists()
+        && run.accepts(listen)
+    {
+        problems.push(format!(
+            "another program listens on {listen}. Stop it, or write another `listen` address in /etc/lodger/config.toml."
+        ));
+    }
     match listen {
         Some(listen) if problems.is_empty() => Ok(listen),
         _ => Err(format!(
@@ -308,6 +326,8 @@ mod tests {
     struct Recorder {
         calls: Vec<String>,
         fail: Option<&'static str>,
+        /// The address where another program listens.
+        taken: Option<SocketAddr>,
     }
 
     impl Run for Recorder {
@@ -318,6 +338,10 @@ mod tests {
                 Some(fail) if call.starts_with(fail) => Err(format!("{call} failed")),
                 _ => Ok(()),
             }
+        }
+
+        fn accepts(&mut self, addr: SocketAddr) -> bool {
+            self.taken == Some(addr)
         }
     }
 
@@ -436,6 +460,9 @@ mod tests {
                 "{err}"
             );
             assert!(err.contains(reason), "{err}");
+            if reason == "no libvirt socket" {
+                assert!(err.contains("libvirtd.socket") && err.contains("virtqemud.socket"));
+            }
             assert_eq!(err.matches("\n- ").count(), 1, "{err}");
             assert!(run.calls.is_empty(), "{:?}", run.calls);
             assert_eq!(tree(&host), before);
@@ -448,6 +475,43 @@ mod tests {
         let host = Host::new(dir.path());
         let err = install(&host, Path::new("/nonexistent"), &mut Recorder::default()).unwrap_err();
         assert_eq!(err.matches("\n- ").count(), 3, "{err}");
+    }
+
+    #[test]
+    fn another_program_on_the_port_stops_the_first_install() {
+        let (_dir, host, exe) = ready_host();
+        let before = tree(&host);
+        let mut run = Recorder {
+            taken: Some(DEFAULT_LISTEN.parse().unwrap()),
+            ..Recorder::default()
+        };
+        let err = install(&host, &exe, &mut run).unwrap_err();
+        assert!(
+            err.contains("another program listens on 127.0.0.1:8460"),
+            "{err}"
+        );
+        assert!(run.calls.is_empty(), "{:?}", run.calls);
+        assert_eq!(tree(&host), before);
+    }
+
+    #[test]
+    fn a_reinstall_expects_the_old_service_on_the_port() {
+        let (_dir, host, exe) = ready_host();
+        install(&host, &exe, &mut Recorder::default()).unwrap();
+        let mut run = Recorder {
+            taken: Some(DEFAULT_LISTEN.parse().unwrap()),
+            ..Recorder::default()
+        };
+        install(&host, &exe, &mut run).unwrap();
+    }
+
+    #[test]
+    fn the_system_runner_sees_a_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert!(System.accepts(addr));
+        drop(listener);
+        assert!(!System.accepts(addr));
     }
 
     #[test]
