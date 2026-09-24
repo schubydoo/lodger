@@ -309,11 +309,20 @@ fn unreadable(path: &Path, account: &Account) -> Option<String> {
         };
         meta.mode() & bit != 0
     };
-    for dir in path
-        .ancestors()
-        .skip(1)
-        .filter(|d| !d.as_os_str().is_empty())
-    {
+    // A symbolic link, like each file in certbot's live folder, makes the
+    // kernel open the folders of the link and then those of its target.
+    let target = match std::fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(e) => return Some(format!("cannot read {}: {e}", path.display())),
+    };
+    if let Some(tree) = hidden_by_unit(&target) {
+        return Some(format!(
+            "{} is below {tree}, which the service cannot see (ProtectHome=yes in its unit)",
+            target.display()
+        ));
+    }
+    let folders = path.ancestors().skip(1).chain(target.ancestors().skip(1));
+    for dir in folders.filter(|d| !d.as_os_str().is_empty()) {
         match std::fs::metadata(dir) {
             Ok(meta) if allows(&meta, 0o100, 0o010, 0o001) => {}
             Ok(_) => {
@@ -326,11 +335,19 @@ fn unreadable(path: &Path, account: &Account) -> Option<String> {
             Err(e) => return Some(format!("cannot read {}: {e}", dir.display())),
         }
     }
-    match std::fs::metadata(path) {
+    match std::fs::metadata(&target) {
         Ok(meta) if allows(&meta, 0o400, 0o040, 0o004) => None,
         Ok(_) => Some(format!("the lodger user cannot read {}", path.display())),
         Err(e) => Some(format!("cannot read {}: {e}", path.display())),
     }
+}
+
+/// The tree that `ProtectHome=yes` in `dist/lodger.service` hides from the
+/// service, if `path` is below one.
+fn hidden_by_unit(path: &Path) -> Option<&'static str> {
+    ["/home", "/root", "/run/user"]
+        .into_iter()
+        .find(|tree| path.starts_with(tree))
 }
 
 /// The fields of the `name:...` line of `/etc/passwd` or `/etc/group`.
@@ -776,5 +793,64 @@ mod tests {
         // Without a lodger user, the group check reports it; this one does not.
         let none = root(&[]);
         assert_eq!(check(&none).outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn tls_checks_the_folders_behind_a_symbolic_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let set = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        // certbot's layout: live/<name>/privkey.pem links to
+        // ../../archive/<name>/privkey1.pem, and archive stays closed.
+        let dir = tempfile::tempdir().unwrap();
+        set(dir.path(), 0o755);
+        let archive = dir.path().join("archive/site");
+        let live = dir.path().join("live/site");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        let real = crate::tls::test_pair::write(&archive, "a", (2031, 1, 1));
+        for path in [&real.cert, &real.key] {
+            set(path, 0o644);
+        }
+        for folder in ["live", "live/site", "archive", "archive/site"] {
+            set(&dir.path().join(folder), 0o755);
+        }
+        let links = TlsFiles {
+            cert: live.join("cert.pem"),
+            key: live.join("privkey.pem"),
+        };
+        std::os::unix::fs::symlink("../../archive/site/a.crt", &links.cert).unwrap();
+        std::os::unix::fs::symlink("../../archive/site/a.key", &links.key).unwrap();
+        let other = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+        let check = || tls_certificate(other.path(), Some(&links), SystemTime::UNIX_EPOCH);
+
+        assert_eq!(check().outcome, Outcome::Pass, "{}", check().reason);
+        set(&dir.path().join("archive"), 0o700);
+        let c = check();
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(c.reason.contains("cannot open the folder"), "{}", c.reason);
+        assert!(c.reason.contains("archive"), "{}", c.reason);
+        set(&dir.path().join("archive"), 0o755);
+        // The folders of the link itself count too.
+        set(&dir.path().join("live"), 0o700);
+        assert_eq!(check().outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn the_unit_hides_home_root_and_run_user() {
+        for hidden in ["/home/a/key.pem", "/root/key.pem", "/run/user/1000/key.pem"] {
+            assert!(hidden_by_unit(Path::new(hidden)).is_some(), "{hidden}");
+        }
+        for seen in [
+            "/etc/lodger/tls/key.pem",
+            "/homes/key.pem",
+            "/run/lodger/key.pem",
+        ] {
+            assert!(hidden_by_unit(Path::new(seen)).is_none(), "{seen}");
+        }
     }
 }
