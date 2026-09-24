@@ -72,7 +72,12 @@ pub enum Command {
     /// Checks the host, copies this binary to /usr/local/bin, creates the
     /// lodger user in the libvirt group, writes /etc/lodger/config.toml if it
     /// does not exist, writes the unit, and starts the service.
-    Install,
+    Install {
+        /// Also make a self-signed TLS certificate for this IP address or host
+        /// name, and turn on HTTPS. Replaces an earlier self-signed pair.
+        #[arg(long, value_name = "IP_OR_NAME")]
+        self_signed: Option<String>,
+    },
     /// Stop and remove the Lodger service. Needs root.
     ///
     /// Keeps /etc/lodger, /var/lib/lodger, and the lodger user unless --purge
@@ -224,9 +229,22 @@ mod tests {
     }
 
     #[test]
-    fn install_takes_no_argument_and_uninstall_takes_purge() {
+    fn install_takes_self_signed_and_uninstall_takes_purge() {
         let cli = Cli::try_parse_from(["lodger", "install"]).unwrap();
-        assert!(matches!(cli.command, Command::Install));
+        assert!(matches!(
+            cli.command,
+            Command::Install { self_signed: None }
+        ));
+        let cli =
+            Cli::try_parse_from(["lodger", "install", "--self-signed", "192.168.1.10"]).unwrap();
+        let Command::Install {
+            self_signed: Some(name),
+        } = cli.command
+        else {
+            panic!("expected install with --self-signed");
+        };
+        assert_eq!(name, "192.168.1.10");
+        assert!(Cli::try_parse_from(["lodger", "install", "--self-signed"]).is_err());
         assert!(Cli::try_parse_from(["lodger", "install", "--purge"]).is_err());
         let cli = Cli::try_parse_from(["lodger", "uninstall"]).unwrap();
         assert!(matches!(cli.command, Command::Uninstall { purge: false }));

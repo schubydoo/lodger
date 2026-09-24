@@ -102,6 +102,10 @@ fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Chec
                             user (sudo chown lodger: key.pem, sudo chmod 0600 key.pem), set \
                             tls_cert and tls_key to the copies, then run: sudo systemctl \
                             restart lodger";
+    const NEW_PAIR: &str = "or make a new self-signed pair (the browser then shows a new \
+                            fingerprint). If tls_cert and tls_key name your own certificate, \
+                            first remove them and move that pair away, then run: sudo lodger \
+                            install --self-signed <ip-or-name>";
     let Some(files) = tls else {
         return Check::skip(
             NAME,
@@ -109,7 +113,7 @@ fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Chec
         );
     };
     if let Err(e) = crate::tls::server_config(files) {
-        return Check::fail(NAME, e, &[FIX]);
+        return Check::fail(NAME, e, &[FIX, NEW_PAIR]);
     }
     // doctor often runs as root, which reads any file, but the service runs as
     // the lodger user. Without that user, the group check already fails.
@@ -122,17 +126,21 @@ fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Chec
     }
     let not_after = match crate::tls::not_after(&files.cert) {
         Ok(t) => t,
-        Err(e) => return Check::fail(NAME, e, &[FIX]),
+        Err(e) => return Check::fail(NAME, e, &[FIX, NEW_PAIR]),
     };
     let cert = files.cert.display();
     let end = not_after.to_system_time();
     if end <= now {
-        Check::fail(NAME, format!("{cert} expired on {not_after}"), &[FIX])
+        Check::fail(
+            NAME,
+            format!("{cert} expired on {not_after}"),
+            &[FIX, NEW_PAIR],
+        )
     } else if end <= now + TLS_WARNING {
         Check::fail(
             NAME,
             format!("{cert} expires on {not_after}, in less than 30 days"),
-            &[FIX],
+            &[FIX, NEW_PAIR],
         )
     } else {
         Check::pass(NAME, format!("{cert} is valid until {not_after}"))
@@ -709,6 +717,7 @@ mod tests {
                 soon.reason
             );
             assert!(soon.fix[0].contains("sudo systemctl restart lodger"));
+            assert!(soon.fix[1].contains("sudo lodger install --self-signed <ip-or-name>"));
         }
 
         let late = tls_certificate(Path::new("/nonexistent"), Some(&files), end + DAY);

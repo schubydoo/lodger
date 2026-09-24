@@ -20,5 +20,7 @@ uri = "qemu:///system"
 # Built-in TLS: the PEM certificate (with any intermediate certificates) and
 # its private key. Set both or neither. The lodger user must be able to read
 # them. With TLS on, a LAN address such as "192.168.1.10:8460" is safe.
+# `sudo lodger install --self-signed <ip-or-name>` makes a self-signed pair
+# at these paths and sets both keys.
 # tls_cert = "/etc/lodger/tls/cert.pem"
 # tls_key = "/etc/lodger/tls/key.pem"
