@@ -5,12 +5,17 @@
 # reference. The syntax is deliberate: it pins a local action to the checked-out ref and
 # is immune to runtime filesystem substitution, so the message is suppressed here rather
 # than the syntax reverted. Lodger calls its composite actions as
-# `uses: $/.github/actions/<name>`. There are no `$/` reusable-workflow calls, so one
-# pattern covers every use, because `\$/.*` matches a subpath as well as the bare root.
+# `uses: $/.github/actions/<name>`, and knope-release.yml calls the reusable workflow
+# release-build.yml as `uses: $/.github/workflows/release-build.yml`, like clauster.
+# actionlint reports the two forms with different messages, so each has its own
+# pattern below.
 #
-# Suppressing the format error also silences actionlint's call validation for those steps
-# (input-name typos, missing required inputs), so test each composite action's inputs in
-# the workflow that uses it.
+# Suppressing the format errors also silences the checks that actionlint ties to the
+# `./` prefix: for a composite action, its call validation (input-name typos, missing
+# required inputs), so test each composite action's inputs in the workflow that uses it;
+# for the reusable-workflow call, the file lookup and the check of its `with:` and
+# `secrets:` against `workflow_call`. knope-release.yml passes one input, `ref`, which
+# release-build.yml declares. Keep the two in step by hand.
 #
 # Remove this file once rhysd/actionlint issue 711 ships `$/` support and the pinned
 # actionlint is bumped past it.
@@ -18,3 +23,4 @@ paths:
   .github/workflows/**/*.{yaml,yml}:
     ignore:
       - 'specifying action "\$/.*" in invalid format because ref is missing'
+      - 'reusable workflow call "\$/.+" at "uses" is not following the format'
