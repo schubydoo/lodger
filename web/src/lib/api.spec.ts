@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
 	ApiError,
+	explanationOf,
 	fetchSession,
 	fetchSetupOpen,
 	fetchVms,
@@ -133,5 +134,28 @@ describe('problemText', () => {
 		expect(problemText(new Error('wrong setup token'))).toBe('Wrong setup token.');
 		expect(problemText(new Error('Done already.'))).toBe('Done already.');
 		expect(problemText('')).toBe('Something went wrong.');
+	});
+});
+
+describe('error explanations', () => {
+	const answer = (body: unknown) =>
+		vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status: 502 }));
+
+	it('reads a complete explanation from an error answer', async () => {
+		const fetcher = answer({ error: 'e', cause: 'c', fix: 'f', commands: ['a', 'b'] });
+		const error = await send('POST', '/api/x', { fetcher }).catch((e: unknown) => e);
+		expect(explanationOf(error)).toEqual({ cause: 'c', fix: 'f', commands: ['a', 'b'] });
+	});
+
+	it.each([
+		{ error: 'e' },
+		{ error: 'e', cause: 'c', fix: 'f' },
+		{ error: 'e', cause: 'c', fix: 1, commands: [] },
+		{ error: 'e', cause: 'c', fix: 'f', commands: [1, 2] },
+		{ error: 'e', cause: 'c', fix: 'f', commands: 'a' }
+	])('ignores an incomplete explanation: %j', async (body) => {
+		const error = await send('POST', '/api/x', { fetcher: answer(body) }).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(ApiError);
+		expect(explanationOf(error)).toBeUndefined();
 	});
 });

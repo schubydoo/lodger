@@ -91,14 +91,44 @@ export const keys = {
 	stats: ['stats'] as const
 };
 
+/**
+ * The cause and the fix of a known libvirt error
+ * (`crates/lodger-virt/src/errors.rs`). `commands` run on the host.
+ */
+export interface Explanation {
+	cause: string;
+	fix: string;
+	commands: string[];
+}
+
 /** An error answer, with its status so the app can react to a 401. */
 export class ApiError extends Error {
 	constructor(
 		readonly status: number,
-		message: string
+		message: string,
+		readonly explanation?: Explanation
 	) {
 		super(message);
 	}
+}
+
+/** The explanation that an error answer carried, if any. */
+export function explanationOf(error: unknown): Explanation | undefined {
+	return error instanceof ApiError ? error.explanation : undefined;
+}
+
+/** Reads `cause`, `fix`, and `commands` from an error body, if all are there. */
+function readExplanation(data: unknown): Explanation | undefined {
+	const d = data as Partial<Record<keyof Explanation, unknown>> | null;
+	if (
+		typeof d?.cause === 'string' &&
+		typeof d.fix === 'string' &&
+		Array.isArray(d.commands) &&
+		d.commands.every((c) => typeof c === 'string')
+	) {
+		return { cause: d.cause, fix: d.fix, commands: d.commands };
+	}
+	return undefined;
 }
 
 async function getJson<T>(path: string, fetcher: typeof fetch = fetch): Promise<T> {
@@ -137,7 +167,8 @@ export async function send<T>(
 		const message = (data as { error?: unknown } | null)?.error;
 		throw new ApiError(
 			res.status,
-			typeof message === 'string' ? message : `${path} answered ${res.status} ${res.statusText}`
+			typeof message === 'string' ? message : `${path} answered ${res.status} ${res.statusText}`,
+			readExplanation(data)
 		);
 	}
 	return data as T;

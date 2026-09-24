@@ -7,17 +7,10 @@
      so and offers Force off. -->
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import Problem from '$lib/components/Problem.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import {
-		ApiError,
-		keys,
-		problemText,
-		vmAction,
-		type Session,
-		type Vm,
-		type VmAction
-	} from '$lib/api';
+	import { ApiError, keys, vmAction, type Session, type Vm, type VmAction } from '$lib/api';
 
 	let { vm }: { vm: Vm } = $props();
 
@@ -34,7 +27,8 @@
 	);
 
 	let busy = $state<VmAction | null>(null);
-	let problem = $state('');
+	/** The last failure, or `null`. */
+	let problem = $state<unknown>(null);
 	let forcing = $state(false);
 	let typed = $state('');
 	/** The state in which a shutdown was requested, until it changes. */
@@ -70,7 +64,7 @@
 		// second click that arrives before the page updates.
 		if (busy) return;
 		if (action === 'force-off' && typed !== vm.name) return;
-		problem = '';
+		problem = null;
 		busy = action;
 		// The state before the request: the event can refresh the list
 		// before the answer arrives.
@@ -89,7 +83,7 @@
 			// A 401 means that the session ended: the app shell then shows
 			// the login.
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
-			problem = problemText(e);
+			problem = e;
 		} finally {
 			busy = null;
 		}
@@ -205,6 +199,6 @@
 		Shutdown requested. {vm.name} stops when its guest finishes.
 	</p>
 {/if}
-{#if problem}
-	<p role="alert" class="mt-1 text-right text-sm text-destructive">{problem}</p>
+{#if problem !== null}
+	<Problem error={problem} class="mt-1 text-right" />
 {/if}

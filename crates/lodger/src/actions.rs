@@ -289,15 +289,82 @@ async fn failure(
     if reason == "no_such_vm" {
         error(code, "no such VM")
     } else {
-        error(code, e.to_string())
+        error_answer(code, &e)
     }
+}
+
+/// The answer for a failed libvirt call, with the explanation of a known
+/// error.
+fn error_answer(code: StatusCode, e: &lodger_virt::Error) -> Response {
+    explained(code, e.to_string(), e.explanation())
+}
+
+/// An error answer. A known libvirt error also carries its `cause`, its
+/// `fix`, and the `commands` of the fix (PRD R10). The `error` text stays
+/// as libvirt wrote it.
+fn explained(
+    code: StatusCode,
+    message: String,
+    explanation: Option<&lodger_virt::Explanation>,
+) -> Response {
+    let mut body = serde_json::json!({ "error": message });
+    if let Some(known) = explanation {
+        body["cause"] = known.cause.into();
+        body["fix"] = known.fix.into();
+        body["commands"] = known.commands.into();
+    }
+    (code, Json(body)).into_response()
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
     use lodger_virt::{SkipReason, Skipped};
 
-    use super::Removal;
+    use super::{Removal, error_answer, explained};
+
+    async fn body_of(response: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_known_error_carries_its_cause_fix_and_commands() {
+        let message = "libvirt: internal error: unable to execute QEMU command 'getfd': \
+                       No file descriptor supplied via SCM_RIGHTS";
+        let known = lodger_virt::explain(message);
+        let response = explained(StatusCode::BAD_GATEWAY, message.into(), known);
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = body_of(response).await;
+        assert_eq!(body["error"], message);
+        assert!(body["cause"].as_str().unwrap().contains("AppArmor"));
+        assert!(body["fix"].as_str().unwrap().contains("/dev/vhost-net rw,"));
+        assert_eq!(body["commands"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_answers_with_the_explanation_of_its_error() {
+        let known = lodger_virt::Error::WrongState(
+            "unable to execute QEMU command 'getfd': No file descriptor supplied via SCM_RIGHTS",
+        );
+        let body = body_of(error_answer(StatusCode::BAD_GATEWAY, &known)).await;
+        assert_eq!(body["commands"].as_array().unwrap().len(), 2);
+        let unknown = lodger_virt::Error::WrongState("the VM is paused");
+        let body = body_of(error_answer(StatusCode::CONFLICT, &unknown)).await;
+        assert_eq!(body, serde_json::json!({ "error": "the VM is paused" }));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_error_keeps_its_text_and_nothing_else() {
+        let message = "libvirt: operation failed: something new";
+        let response = explained(StatusCode::BAD_GATEWAY, message.into(), None);
+        assert_eq!(
+            body_of(response).await,
+            serde_json::json!({ "error": message })
+        );
+    }
 
     #[test]
     fn every_skip_reason_has_its_json_shape() {
