@@ -117,8 +117,10 @@ fn group(root: &Path) -> Check {
     let Some(lodger) = entry(&users, "lodger") else {
         return Check::fail(
             NAME,
-            "the lodger user does not exist, so the service cannot run. `lodger install` creates it",
-            &["sudo lodger install"],
+            "the lodger user does not exist, so the service cannot run",
+            &[
+                "sudo useradd --system --groups libvirt --home-dir /var/lib/lodger --shell /usr/sbin/nologin lodger",
+            ],
         );
     };
     // polkit reads real membership: the primary group or the member list.
@@ -150,8 +152,7 @@ fn apparmor(root: &Path) -> Check {
         return Check::skip(NAME, "libvirt uses no AppArmor abstraction on this host");
     };
     let local = std::fs::read_to_string(root.join(APPARMOR_LOCAL)).unwrap_or_default();
-    let has_rule = |text: &str| text.lines().any(|line| line.trim() == VHOST_RULE);
-    if has_rule(&abstraction) || has_rule(&local) {
+    if has_vhost_rule(&abstraction) || has_vhost_rule(&local) {
         Check::pass(
             NAME,
             "AppArmor lets QEMU open /dev/vhost-net, so NIC hot-plug works",
@@ -164,16 +165,37 @@ fn apparmor(root: &Path) -> Check {
             ),
             &[
                 "sudo mkdir -p /etc/apparmor.d/local/abstractions",
-                "echo '/dev/vhost-net rw,' | sudo tee -a /etc/apparmor.d/local/abstractions/libvirt-qemu",
+                // The leading newline keeps the rule off a last line that
+                // has no newline of its own.
+                "printf '\\n/dev/vhost-net rw,\\n' | sudo tee -a /etc/apparmor.d/local/abstractions/libvirt-qemu",
             ],
         )
     }
 }
 
+/// True if a line of the `AppArmor` text allows reading and writing
+/// `/dev/vhost-net`. Spaces and a trailing comment do not matter.
+fn has_vhost_rule(text: &str) -> bool {
+    text.lines().any(|line| {
+        let rule = line.split('#').next().unwrap_or_default().trim();
+        let Some(rule) = rule.strip_suffix(',') else {
+            return false;
+        };
+        let mut parts = rule.split_whitespace();
+        parts.next() == Some("/dev/vhost-net")
+            && parts
+                .next()
+                .is_some_and(|perms| perms.contains('r') && perms.contains('w'))
+    })
+}
+
 fn selinux(root: &Path) -> Check {
     const NAME: &str = "SELinux virt_use_nfs";
-    if !root.join(SELINUX_ENFORCE).exists() {
+    let Ok(enforce) = std::fs::read_to_string(root.join(SELINUX_ENFORCE)) else {
         return Check::skip(NAME, "SELinux is not active");
+    };
+    if enforce.trim() == "0" {
+        return Check::pass(NAME, "SELinux is permissive, so it blocks no NFS disk");
     }
     let Ok(value) = std::fs::read_to_string(root.join(SELINUX_NFS)) else {
         return Check::skip(NAME, "the SELinux policy has no virt_use_nfs boolean");
@@ -371,7 +393,7 @@ mod tests {
             check.fix,
             [
                 "sudo mkdir -p /etc/apparmor.d/local/abstractions",
-                "echo '/dev/vhost-net rw,' | sudo tee -a /etc/apparmor.d/local/abstractions/libvirt-qemu",
+                "printf '\\n/dev/vhost-net rw,\\n' | sudo tee -a /etc/apparmor.d/local/abstractions/libvirt-qemu",
             ]
         );
     }
@@ -383,6 +405,19 @@ mod tests {
             (APPARMOR_ABSTRACTION, "  /dev/vhost-net rw,\n"),
         ]);
         assert_eq!(apparmor(dir.path()).outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn the_vhost_rule_allows_spaces_and_a_comment() {
+        assert!(has_vhost_rule("  /dev/vhost-net rw,\n"));
+        assert!(has_vhost_rule("/dev/vhost-net  rw,  # NIC hot-plug\n"));
+        assert!(has_vhost_rule("/dev/vhost-net rwk,\n"));
+        assert!(!has_vhost_rule("# /dev/vhost-net rw,\n"));
+        assert!(!has_vhost_rule("/dev/vhost-net r,\n"));
+        assert!(!has_vhost_rule("/dev/vhost-net w,\n"));
+        assert!(!has_vhost_rule("/dev/vhost-net rw\n"));
+        assert!(!has_vhost_rule("/dev/vhost-net-x rw,\n"));
+        assert!(!has_vhost_rule("deny /dev/vhost-net rw,\n"));
     }
 
     #[test]
@@ -411,6 +446,7 @@ mod tests {
         assert_eq!(other.fix[0], "sudo usermod -aG libvirt lodger");
         let no_user = with(GROUPS, "root:x:0:0::/root:/bin/sh\n");
         assert!(no_user.reason.contains("the lodger user does not exist"));
+        assert!(no_user.fix[0].starts_with("sudo useradd --system --groups libvirt "));
         let no_group = with("kvm:x:993:libvirt\n", USERS);
         assert!(no_group.reason.contains("the libvirt group does not exist"));
     }
@@ -418,7 +454,7 @@ mod tests {
     #[test]
     fn selinux_reads_the_current_value_of_the_boolean() {
         let with = |value: Option<&str>| {
-            let mut files = vec![(SELINUX_ENFORCE, "1")];
+            let mut files = vec![(SELINUX_ENFORCE, "1\n")];
             if let Some(v) = value {
                 files.push((SELINUX_NFS, v));
             }
@@ -432,6 +468,10 @@ mod tests {
         assert_eq!(with(None).outcome, Outcome::Skip);
         let dir = root(&[]);
         assert_eq!(selinux(dir.path()).reason, "SELinux is not active");
+        let permissive = root(&[(SELINUX_ENFORCE, "0\n"), (SELINUX_NFS, "0 0")]);
+        let check = selinux(permissive.path());
+        assert_eq!(check.outcome, Outcome::Pass);
+        assert!(check.reason.contains("permissive"), "{}", check.reason);
     }
 
     #[test]
