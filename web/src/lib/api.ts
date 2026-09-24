@@ -84,6 +84,9 @@ export const keys = {
 	host: ['host'] as const,
 	vms: ['vms'] as const,
 	vm: (id: string) => ['vms', id] as const,
+	networks: ['networks'] as const,
+	network: (id: string) => ['networks', id] as const,
+	hostBridges: ['host-bridges'] as const,
 	session: ['session'] as const,
 	setup: ['setup'] as const,
 	accounts: ['accounts'] as const,
@@ -286,6 +289,69 @@ export const fetchAccounts = (fetcher?: typeof fetch) =>
 
 export const fetchHost = (fetcher?: typeof fetch) => getJson<Host>('/api/host', fetcher);
 export const fetchVms = (fetcher?: typeof fetch) => getJson<Vm[]>('/api/vms', fetcher);
+
+/** A virtual network, as `GET /api/networks` lists it. */
+export interface Network {
+	uuid: string;
+	name: string;
+	active: boolean;
+	persistent: boolean;
+	autostart: boolean;
+	/** The bridge device on the host, such as `virbr0`. */
+	bridge: string | null;
+}
+
+/** One network with its mode, subnets, and users (`crates/lodger/src/networks.rs`). */
+export interface NetworkDetail extends Network {
+	/** `nat`, `bridge`, or another forward mode. `null` means isolated. */
+	mode: string | null;
+	/** The IPv4 subnets, such as `192.168.122.0/24`. */
+	subnets: string[];
+	/** The VMs with a NIC on the network. */
+	used_by: string[];
+}
+
+export const fetchNetworks = (fetcher?: typeof fetch) =>
+	getJson<Network[]>('/api/networks', fetcher);
+export const fetchNetwork = (id: string, fetcher?: typeof fetch) =>
+	getJson<NetworkDetail>(`/api/networks/${id}`, fetcher);
+/** The bridges on the host. Lodger only reads them. */
+export const fetchHostBridges = (fetcher?: typeof fetch) =>
+	getJson<string[]>('/api/host-bridges', fetcher);
+
+/** A new network. */
+export type NewNetwork =
+	| { mode: 'nat' | 'isolated'; name: string; subnet: string; autostart: boolean }
+	| { mode: 'bridge'; name: string; bridge: string; autostart: boolean };
+
+/** Creates and starts a network, and returns its UUID. */
+export function createNetwork(
+	network: NewNetwork,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<{ uuid: string }> {
+	return send<{ uuid: string }>('POST', '/api/networks', { body: network, ...options });
+}
+
+/** Starts or stops a network, or switches its autostart. */
+export function changeNetwork(
+	id: string,
+	change: { active?: boolean; autostart?: boolean },
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('PATCH', `/api/networks/${id}`, { body: change, ...options });
+}
+
+/** Deletes a network. `confirm` is its name as the user typed it. */
+export function deleteNetwork(
+	id: string,
+	options: { confirm: string; csrf?: string; fetcher?: typeof fetch }
+): Promise<null> {
+	return send<null>('DELETE', `/api/networks/${id}`, {
+		body: { confirm: options.confirm },
+		csrf: options.csrf,
+		fetcher: options.fetcher
+	});
+}
 
 /**
  * Formats a rate in bytes per second, for example `1.5 MB/s`. It rounds before

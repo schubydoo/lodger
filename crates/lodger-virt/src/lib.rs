@@ -6,6 +6,7 @@ mod console;
 mod delete;
 mod errors;
 mod events;
+mod network;
 mod power;
 mod stats;
 mod supervisor;
@@ -15,6 +16,7 @@ pub use conn::{Error, Virt};
 pub use delete::{Removal, SkipReason, Skipped};
 pub use errors::{Explanation, explain};
 pub use events::{DomainChange, Event};
+pub use network::host_bridges;
 pub use power::Power;
 pub use supervisor::{ConnState, Host};
 
