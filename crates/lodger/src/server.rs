@@ -148,6 +148,10 @@ pub async fn serve(config: Config) -> Result<(), String> {
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
+    // The handlers must exist before the address line: a supervisor or a test
+    // may send SIGTERM as soon as it reads that line.
+    let shutdown =
+        shutdown_signal().map_err(|e| format!("cannot install the signal handlers: {e}"))?;
     // stdout carries only the address line, which scripts and tests read.
     // Everything else goes to stderr, which systemd sends to the journal.
     println!(
@@ -169,7 +173,7 @@ pub async fn serve(config: Config) -> Result<(), String> {
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown)
     .await
     .map_err(fail)
 }
@@ -198,14 +202,21 @@ fn summary(config: &Config) -> String {
     )
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("install the SIGTERM handler");
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = term.recv() => {}
-    }
+/// Installs the SIGINT and SIGTERM handlers now, and returns the future that
+/// ends on the first of them. `tokio::signal::ctrl_c` and a handler created
+/// inside the returned future would install only on the first poll, and
+/// axum polls the shutdown future in a task of its own, maybe later. A
+/// signal in between would kill the process without a clean shutdown.
+fn shutdown_signal() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    })
 }
 
 #[cfg(test)]
