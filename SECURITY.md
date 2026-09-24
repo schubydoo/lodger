@@ -37,4 +37,4 @@ too:
 - A state-changing request that passes without the Origin or CSRF check.
 - A WebSocket that opens without a valid ticket.
 - A secret in a log line or in the audit log.
-- A release archive that is unsigned or that does not match its provenance.
+- A release archive that does not match the signed `checksums.txt` or its provenance.
