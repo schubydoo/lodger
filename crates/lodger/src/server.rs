@@ -81,7 +81,10 @@ pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/host", get(api::host))
         .route("/api/vms", get(api::vms))
-        .route("/api/vms/{id}", get(api::vm))
+        .route(
+            "/api/vms/{id}",
+            get(api::vm).delete(actions::delete).patch(actions::update),
+        )
         .route("/api/vms/{id}/actions/{action}", post(actions::run))
         .route("/api/session", get(auth::current).delete(auth::logout))
         .route("/api/ws-tickets", post(auth::issue_ticket))
@@ -1164,7 +1167,10 @@ mod tests {
         );
         assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
 
-        assert_eq!(call(&addr, &tab, "POST", &act("reboot"), None).await.0, 404);
+        assert_eq!(
+            call(&addr, &tab, "POST", &act("suspend"), None).await.0,
+            404
+        );
         let unknown = format!("/api/vms/{}/actions/start", Uuid::from_u128(0xdead));
         assert_eq!(call(&addr, &tab, "POST", &unknown, None).await.0, 404);
         let no_session = raw(&addr, "POST", &act("start"), &[SAME_ORIGIN.into()], "").await;
@@ -1193,6 +1199,136 @@ mod tests {
             .job(move |c| c.lookup_domain_by_uuid(id)?.undefine())
             .await
             .unwrap();
+    }
+
+    /// VM `id` as the API reports it, polled until `done` accepts it or 5
+    /// seconds pass. Returns the last answer.
+    async fn wait_for_vm(
+        addr: &str,
+        tab: &Tab,
+        id: Uuid,
+        done: impl Fn(u16, &Value) -> bool,
+    ) -> (u16, Value) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (status, vm) = call(addr, tab, "GET", &format!("/api/vms/{id}"), None).await;
+            if done(status, &vm) || Instant::now() > deadline {
+                return (status, vm);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn pause_resume_reboot_autostart_and_delete_are_audited() {
+        let (addr, token, state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let outside = Virt::open(TEST_URI).await.unwrap();
+        let name = "lodger-spike-life-api";
+        // A disk outside every pool: the delete keeps it and says why. The
+        // lodger-virt tests delete real pool volumes.
+        let path = "/srv/lodger-spike-life-api.img";
+        let xml = format!(
+            "<domain type='test'><name>{name}</name><memory>65536</memory>\
+             <os><type>hvm</type></os><devices><disk type='file' device='disk'>\
+             <source file='{path}'/><target dev='vda'/></disk></devices></domain>"
+        );
+        let id = outside
+            .job(move |c| c.define_domain_xml(&xml)?.uuid())
+            .await
+            .unwrap();
+        assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
+        let act = |action: &str| format!("/api/vms/{id}/actions/{action}");
+        let vm = format!("/api/vms/{id}");
+
+        assert_eq!(call(&addr, &tab, "POST", &act("pause"), None).await.0, 409);
+        assert_eq!(call(&addr, &tab, "POST", &act("start"), None).await.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "running").await, "running");
+        assert_eq!(call(&addr, &tab, "POST", &act("pause"), None).await.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "paused").await, "paused");
+        let (status, answer) = call(&addr, &tab, "POST", &act("reboot"), None).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("the VM is paused"))
+        );
+        assert_eq!(call(&addr, &tab, "POST", &act("resume"), None).await.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "running").await, "running");
+        assert_eq!(call(&addr, &tab, "POST", &act("reboot"), None).await.0, 204);
+
+        // Autostart: libvirt sends no event, so Lodger's own event must
+        // refresh the inventory.
+        let on = serde_json::json!({ "autostart": true });
+        assert_eq!(call(&addr, &tab, "PATCH", &vm, Some(on)).await.0, 204);
+        let (_, answer) = wait_for_vm(&addr, &tab, id, |_, v| v["autostart"] == true).await;
+        assert_eq!(answer["autostart"], true);
+        for bad in [
+            serde_json::json!({ "autostart": "yes" }),
+            serde_json::json!({ "autostart": false, "name": "x" }),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(call(&addr, &tab, "PATCH", &vm, Some(bad)).await.0, 400);
+        }
+        let off = serde_json::json!({ "autostart": false });
+        assert_eq!(call(&addr, &tab, "PATCH", &vm, Some(off)).await.0, 204);
+
+        // Delete needs the typed name, and the VM must be shut off.
+        let remove =
+            |confirm: &str| Some(serde_json::json!({ "confirm": confirm, "remove_volumes": true }));
+        for body in [None, remove("LODGER-SPIKE-LIFE-API")] {
+            let (status, answer) = call(&addr, &tab, "DELETE", &vm, body).await;
+            assert_eq!(status, 422, "{answer}");
+        }
+        let (status, answer) = call(&addr, &tab, "DELETE", &vm, remove(name)).await;
+        assert_eq!(
+            (status, answer["error"].as_str()),
+            (409, Some("shut the VM down first"))
+        );
+        let confirm = serde_json::json!({ "confirm": name });
+        let forced = call(&addr, &tab, "POST", &act("force-off"), Some(confirm)).await;
+        assert_eq!(forced.0, 204);
+        assert_eq!(wait_for_state(&addr, &tab, id, "shutoff").await, "shutoff");
+        let (status, answer) = call(&addr, &tab, "DELETE", &vm, remove(name)).await;
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(
+            answer,
+            serde_json::json!({
+                "removed": [],
+                "skipped": [{ "path": path, "reason": "not_in_pool" }],
+            })
+        );
+        let (status, _) = wait_for_vm(&addr, &tab, id, |s, _| s == 404).await;
+        assert_eq!(status, 404);
+        assert_eq!(call(&addr, &tab, "DELETE", &vm, remove(name)).await.0, 404);
+        let no_session = raw(&addr, "DELETE", &vm, &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(no_session.0, 401);
+
+        let lines = audit_lines(&state).await;
+        let rows: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("vm."))
+            .map(String::as_str)
+            .collect();
+        let row = |event: &str, result: &str, detail: &str| {
+            format!("{event} admin 127.0.0.1 {name} {result} {detail}")
+        };
+        let lifecycle = |result: &str, detail: &str| row("vm.lifecycle", result, detail);
+        assert_eq!(
+            rows,
+            [
+                lifecycle("failed", r#"{"action":"pause","reason":"wrong_state"}"#),
+                lifecycle("ok", r#"{"action":"start"}"#),
+                lifecycle("ok", r#"{"action":"pause"}"#),
+                lifecycle("failed", r#"{"action":"reboot","reason":"wrong_state"}"#),
+                lifecycle("ok", r#"{"action":"resume"}"#),
+                lifecycle("ok", r#"{"action":"reboot"}"#),
+                row("vm.edited", "ok", r#"{"action":"autostart-on"}"#),
+                row("vm.edited", "ok", r#"{"action":"autostart-off"}"#),
+                lifecycle("failed", r#"{"action":"delete","reason":"wrong_state"}"#),
+                lifecycle("ok", r#"{"action":"force-off"}"#),
+                lifecycle("ok", r#"{"action":"delete"}"#),
+            ]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
