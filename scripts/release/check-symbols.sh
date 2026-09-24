@@ -17,7 +17,7 @@ highest() {
 
 check() {
   local prefix=$1 max=$2 got newest
-  got=$(highest "$prefix")
+  got=$(highest "$prefix" || true)
   if [ -z "$got" ]; then
     echo "::error::$bin needs no ${prefix}_ symbol version, so the check cannot work"
     exit 1

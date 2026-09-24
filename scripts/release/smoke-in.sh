@@ -15,7 +15,7 @@ case "$image" in
   fedora*|rockylinux/*)
     install='dnf -q -y install libvirt-libs' ;;
   archlinux*)
-    install='pacman -Sy --noconfirm --needed libvirt >/dev/null' ;;
+    install='pacman -Syu --noconfirm --needed libvirt >/dev/null' ;;
   *)
     echo "::error::no install command for $image"; exit 1 ;;
 esac
