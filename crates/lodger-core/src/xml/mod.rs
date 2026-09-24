@@ -6,6 +6,7 @@
 //! feature keeps attributes in their order, so [`write()`] gives the same text
 //! on every run, and tests can compare it.
 
+pub mod network;
 pub mod pool;
 
 use xmltree::{Element, EmitterConfig, XMLNode};

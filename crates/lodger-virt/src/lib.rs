@@ -28,6 +28,7 @@ pub fn client_library_version() -> Result<(u32, u32, u32), virt::error::Error> {
 #[cfg(test)]
 mod tests {
     use lodger_core::validate::Name;
+    use lodger_core::xml::network::{NetworkXml, NewNetwork};
     use lodger_core::xml::pool::{NewPool, PoolXml};
 
     #[test]
@@ -67,6 +68,41 @@ mod tests {
             assert_eq!(read.target_path(), Some(pool.path.as_str()));
             // libvirt's answer counts as an existing pool with this folder.
             assert!(pool.check_against([("same", &read)]).is_err());
+        }
+    }
+
+    /// The network XML from `lodger-core` goes through libvirt and back.
+    #[tokio::test]
+    async fn libvirt_accepts_the_network_xml_and_returns_the_same_network() {
+        let virt = crate::Virt::open("test:///default").await.unwrap();
+        let name = |n| Name::parse("Network name", n).unwrap();
+        let bridges = ["br0".to_owned()];
+        let networks = [
+            NewNetwork::nat(name("lodger-xml-nat"), "10.231.0.0/24").unwrap(),
+            NewNetwork::isolated(name("lodger-xml-iso"), "10.232.0.0/28").unwrap(),
+            NewNetwork::bridge(name("lodger-xml-br"), "br0", &bridges).unwrap(),
+        ];
+        for network in networks {
+            let xml = network.to_xml();
+            let back = virt
+                .read(move |c| {
+                    let defined = c.define_network_xml(&xml)?;
+                    let back = defined.xml_desc(0)?;
+                    defined.undefine()?;
+                    Ok(back)
+                })
+                .await
+                .unwrap();
+            let read = NetworkXml::parse(&back).unwrap();
+            assert_eq!(read.name(), Some(network.name.as_str()));
+            assert_eq!(
+                read.subnets(),
+                network.subnet().into_iter().collect::<Vec<_>>()
+            );
+            // libvirt's answer counts as an existing network with this subnet.
+            if network.subnet().is_some() {
+                assert!(network.check_against([("same", &read)]).is_err());
+            }
         }
     }
 }
