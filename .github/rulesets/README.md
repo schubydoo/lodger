@@ -8,10 +8,11 @@ gh api --method PUT repos/schubydoo/lodger/rulesets/<id> --input .github/ruleset
 ```
 
 - `main.json` protects the default branch: no deletion or force-push, linear history,
-  squash merges only, resolved review threads, and 2 required checks:
-  `ci required checks passed` and `conventional PR title`.
+  squash merges only, resolved review threads, 3 required checks
+  (`ci required checks passed`, `security required checks passed`, and
+  `conventional PR title`), and a CodeQL gate: a high or critical security alert, or
+  an error alert, blocks the merge.
 - `protect-version-tags.json` blocks deleting or force-pushing any `v*` tag.
 
-Scratchsmith's `main` ruleset also requires `security required checks passed` and a
-CodeQL gate. Lodger adds both when its security and CodeQL workflows exist. A required
-check that never runs would block every merge.
+Apply a new required check only after its workflow has run on `main`. A required check
+that never runs blocks every merge.
