@@ -9,11 +9,27 @@ use xmltree::{Element, XMLNode};
 use super::{XmlError, element_with, parse, text_element, write};
 use crate::validate::{InputError, Name, parse_host, parse_path};
 
-/// Folders that must never hold a pool: removing a pool can delete the files
-/// in its folder.
-const SYSTEM_PATHS: [&str; 17] = [
-    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64", "/opt", "/proc",
-    "/root", "/run", "/sbin", "/sys", "/usr", "/var",
+/// System folders that must never hold a pool, and no folder below them:
+/// removing a pool can delete the files in its folder, and an NFS pool
+/// mounts its export over the folder and hides what was there. Many hosts
+/// empty /tmp at each boot.
+const SYSTEM_TREES: [&str; 14] = [
+    "/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/proc", "/root", "/run", "/sbin",
+    "/sys", "/tmp", "/usr",
+];
+
+/// Folders that must not hold a pool themselves, although a folder below
+/// them may, such as /var/lib/libvirt/images.
+const SYSTEM_FOLDERS: [&str; 9] = [
+    "/",
+    "/home",
+    "/media",
+    "/mnt",
+    "/opt",
+    "/srv",
+    "/var",
+    "/var/lib",
+    "/var/lib/libvirt",
 ];
 
 /// Where the pool's volumes live.
@@ -108,7 +124,10 @@ impl NewPool {
 fn target_path(value: &str) -> Result<String, InputError> {
     const FIELD: &str = "Pool folder";
     let path = parse_path(FIELD, value)?;
-    if SYSTEM_PATHS.contains(&path.as_str()) {
+    let in_tree = SYSTEM_TREES
+        .iter()
+        .any(|tree| path == *tree || path.starts_with(&format!("{tree}/")));
+    if in_tree || SYSTEM_FOLDERS.contains(&path.as_str()) {
         return Err(InputError::SystemPath { field: FIELD, path });
     }
     Ok(path)
@@ -386,18 +405,36 @@ mod tests {
             InputError::PathDotSegment { .. }
         ));
         assert!(matches!(dir("/srv/v\0m"), InputError::Nul { .. }));
-        for system in SYSTEM_PATHS
+        let below = SYSTEM_TREES.iter().map(|tree| format!("{tree}/sub/folder"));
+        for system in SYSTEM_TREES
             .iter()
+            .chain(SYSTEM_FOLDERS.iter())
             .map(|p| (*p).to_owned())
-            .chain(["/etc/".into(), "//usr".into()])
+            .chain(below)
+            .chain([
+                "/etc/".into(),
+                "//usr".into(),
+                "/usr/lib".into(),
+                "/etc/ssh".into(),
+            ])
         {
             assert!(
                 matches!(dir(&system), InputError::SystemPath { .. }),
                 "{system}"
             );
         }
-        // A folder below a system folder is fine.
-        assert!(NewPool::dir(name("p"), "/home/vm").is_ok());
+        // A folder below an exact system folder is fine, and so is a name
+        // that only starts like a system tree.
+        for fine in [
+            "/home/vm",
+            "/srv/vm",
+            "/mnt/nas",
+            "/var/lib/libvirt/images",
+            "/usrdata",
+            "/tmpfs-pool",
+        ] {
+            assert!(NewPool::dir(name("p"), fine).is_ok(), "{fine}");
+        }
         assert!(NewPool::dir(name("p"), "/var/lib/libvirt/images").is_ok());
         let nfs = |host, export| NewPool::nfs(name("p"), host, export, "/mnt/p").unwrap_err();
         assert!(matches!(

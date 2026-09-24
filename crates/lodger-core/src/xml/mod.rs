@@ -3,7 +3,7 @@
 //!
 //! Every parse rejects a `<!DOCTYPE`: libvirt never writes one, and a
 //! document type is the way in for entity attacks. The `attribute-order`
-//! feature keeps attributes in their order, so [`write`] gives the same text
+//! feature keeps attributes in their order, so [`write()`] gives the same text
 //! on every run, and tests can compare it.
 
 pub mod pool;

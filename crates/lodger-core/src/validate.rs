@@ -68,7 +68,7 @@ pub enum InputError {
     #[error("{field} must not contain . or .. as a folder name")]
     PathDotSegment { field: &'static str },
     #[error(
-        "{field} is {path}, a system folder. Use a folder of its own, such as /var/lib/libvirt/images"
+        "{field} {path} is a system folder or is inside one. Use a folder of its own, such as /var/lib/libvirt/images"
     )]
     SystemPath { field: &'static str, path: String },
     #[error("{field} is not a host name or an IP address")]
