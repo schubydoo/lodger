@@ -23,7 +23,7 @@ Fixes #(issue number)
 - [ ] The PR title follows Conventional Commits, and the PR targets `main`
 - [ ] A new pinned version (tool, action input, container image, toolchain) has its Renovate entry in
       `schubydoo/renovate-config` (`lodger.json`)
-- [ ] Kept Lodger's invariants: `unsafe` only in `crates/lodger-virt/src/events/ffi.rs`; only `lodger-virt`
+- [ ] Kept Lodger's invariants: `unsafe` only in `crates/lodger-virt/src/{events,stats}/ffi.rs`; only `lodger-virt`
       imports `virt`; libvirt stays the source of truth (no VM data in SQLite); XML only from the builders,
       never by joining strings; no subprocess calls; no secret in any log
 

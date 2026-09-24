@@ -1,16 +1,50 @@
 // The client for /ws/events (crates/lodger/src/ws.rs). The server sends small
 // JSON messages that name what changed. The client does not apply them to any
-// data itself: it tells TanStack Query which queries to fetch again.
+// data itself: it tells TanStack Query which queries to fetch again. The one
+// exception is `stats`, which carries the data and goes straight into the
+// query cache. Only a page that calls `wantStats` makes the server send it.
 
 import type { QueryClient } from '@tanstack/svelte-query';
-import { keys, type Connection } from './api';
+import { keys, type Connection, type VmStats } from './api';
 
 export type Update =
 	| { type: 'vm'; id: string }
 	| { type: 'pool'; id: string }
 	| { type: 'network'; id: string }
 	| { type: 'resync' }
-	| ({ type: 'connection' } & Connection);
+	| ({ type: 'connection' } & Connection)
+	| { type: 'stats'; vms: VmStats[] };
+
+const SUBSCRIBE = JSON.stringify({ subscribe: 'stats' });
+const UNSUBSCRIBE = JSON.stringify({ unsubscribe: 'stats' });
+
+/** The pages that want live stats, and the open socket that asks for them. */
+const statsInterest: {
+	count: number;
+	send: ((text: string) => void) | null;
+	client: QueryClient | null;
+} = { count: 0, send: null, client: null };
+
+/**
+ * Asks the server for live stats while at least one page wants them. Call it
+ * when a page opens, and call the returned function when it closes. The
+ * server polls libvirt only while some socket subscribes (TAD 6.2).
+ */
+export function wantStats(): () => void {
+	statsInterest.count += 1;
+	if (statsInterest.count === 1) statsInterest.send?.(SUBSCRIBE);
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		statsInterest.count -= 1;
+		if (statsInterest.count === 0) {
+			statsInterest.send?.(UNSUBSCRIBE);
+			// Old values must not show as live when a page opens later.
+			statsInterest.client?.removeQueries({ queryKey: [...keys.stats] });
+		}
+	};
+}
 
 /** The query keys to fetch again after `update`, or `'all'` for every query. */
 export function invalidationsFor(update: Update): (readonly unknown[])[] | 'all' {
@@ -25,6 +59,8 @@ export function invalidationsFor(update: Update): (readonly unknown[])[] | 'all'
 			return [keys.host];
 		case 'resync':
 			return 'all';
+		case 'stats':
+			return [];
 	}
 }
 
@@ -38,7 +74,7 @@ export function parseUpdate(text: string): Update | null {
 	}
 	if (typeof value !== 'object' || value === null) return null;
 	const type = (value as { type?: unknown }).type;
-	return ['vm', 'pool', 'network', 'resync', 'connection'].includes(type as string)
+	return ['vm', 'pool', 'network', 'resync', 'connection', 'stats'].includes(type as string)
 		? (value as Update)
 		: null;
 }
@@ -89,15 +125,24 @@ export function connectEvents(options: EventSocketOptions): () => void {
 
 	const connect = (url: string) => {
 		if (stopped) return;
-		socket = create(url);
-		socket.onopen = () => {
+		const current = create(url);
+		socket = current;
+		current.onopen = () => {
 			void options.client.invalidateQueries();
 			attempt = 0;
+			statsInterest.client = options.client;
+			statsInterest.send = (text) => current.send(text);
+			// A new socket has no subscription yet, the first one or not.
+			if (statsInterest.count > 0) current.send(SUBSCRIBE);
 			options.onOpenChange?.(true);
 		};
-		socket.onmessage = (event: MessageEvent) => {
+		current.onmessage = (event: MessageEvent) => {
 			const update = parseUpdate(String(event.data));
 			if (!update) return;
+			if (update.type === 'stats') {
+				options.client.setQueryData(keys.stats, update.vms);
+				return;
+			}
 			const stale = invalidationsFor(update);
 			if (stale === 'all') {
 				void options.client.invalidateQueries();
@@ -107,7 +152,8 @@ export function connectEvents(options: EventSocketOptions): () => void {
 				void options.client.invalidateQueries({ queryKey: [...queryKey] });
 			}
 		};
-		socket.onclose = () => {
+		current.onclose = () => {
+			if (socket === current) statsInterest.send = null;
 			options.onOpenChange?.(false);
 			retry();
 		};
@@ -116,6 +162,7 @@ export function connectEvents(options: EventSocketOptions): () => void {
 	open();
 	return () => {
 		stopped = true;
+		statsInterest.send = null;
 		socket?.close();
 	};
 }

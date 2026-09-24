@@ -1,11 +1,11 @@
 name: Nightly
 
 # Slow checks that do not run on every pull request (TAD section 9.3).
-# Today: the libvirt event glue under AddressSanitizer. The real-VM tests with
-# KVM join this file later.
+# Today: the 2 `unsafe` files (the libvirt event glue and the stats call) under
+# AddressSanitizer. The real-VM tests with KVM join this file later.
 #
-# The AddressSanitizer job also runs on each pull request that changes the event
-# glue, because every change to the one `unsafe` module needs the stress test.
+# The AddressSanitizer job also runs on each pull request that changes either
+# file, because every change to `unsafe` code needs the stress tests.
 
 on:
   schedule:
@@ -16,6 +16,7 @@ on:
     # (the `virt` pin and tokio), and this job's own files.
     paths:
       - crates/lodger-virt/src/events/**
+      - crates/lodger-virt/src/stats/**
       - crates/lodger-virt/src/conn.rs
       - Cargo.lock
       - .github/workflows/nightly.yml
@@ -35,9 +36,11 @@ jobs:
   asan:
     # 10,000 domain events through the FFI trampolines, with handles that open
     # and drop on the way, so registration and libvirt's free callback run many
-    # times. AddressSanitizer needs nightly Rust and a std built with it
-    # (`-Zbuild-std`). The test driver runs in process, so no libvirtd is needed.
-    name: event glue under AddressSanitizer
+    # times. Then 2,000 stats calls, with a domain that starts and stops on the
+    # way, so the record copy and the list free run many times. AddressSanitizer
+    # needs nightly Rust and a std built with it (`-Zbuild-std`). The test driver
+    # runs in process, so no libvirtd is needed.
+    name: unsafe code under AddressSanitizer
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -54,7 +57,7 @@ jobs:
           components: rust-src
           rustflags: ""
           build-warnings: warn
-      - name: Stress test under AddressSanitizer
+      - name: Stress tests under AddressSanitizer
         env:
           RUSTFLAGS: -Zsanitizer=address
           # One known leak inside libvirt itself. The file explains it.
@@ -62,3 +65,4 @@ jobs:
         run: >-
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
           -p lodger-virt -- --exact events::tests::stress_ten_thousand_events
+          stats::tests::stress_two_thousand_stats_calls

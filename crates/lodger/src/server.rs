@@ -16,6 +16,7 @@ use crate::assets::{self, AssetSource, Embedded};
 use crate::config::Config;
 use crate::db::Db;
 use crate::setup::{self, Setup, SetupToken};
+use crate::stats::Stats;
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
 use crate::{accounts, actions, api, auth, console, security, ws};
@@ -35,6 +36,8 @@ pub struct AppState {
     pub public_origin: Option<Arc<str>>,
     /// The Content-Security-Policy for every response.
     pub csp: Arc<HeaderValue>,
+    /// Live VM stats for the sockets that subscribe.
+    pub stats: Stats,
 }
 
 impl AppState {
@@ -52,6 +55,7 @@ impl AppState {
         Self {
             csp: Arc::new(security::csp(&page, public_origin.as_deref())),
             public_origin: public_origin.map(Arc::from),
+            stats: Stats::new(Arc::clone(&host), crate::stats::PERIOD),
             host,
             db,
             setup: Arc::new(std::sync::Mutex::new(setup)),
@@ -144,6 +148,10 @@ pub async fn serve(config: Config) -> Result<(), String> {
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
+    // The handlers must exist before the address line: a supervisor or a test
+    // may send SIGTERM as soon as it reads that line.
+    let shutdown =
+        shutdown_signal().map_err(|e| format!("cannot install the signal handlers: {e}"))?;
     // stdout carries only the address line, which scripts and tests read.
     // Everything else goes to stderr, which systemd sends to the journal.
     println!(
@@ -165,7 +173,7 @@ pub async fn serve(config: Config) -> Result<(), String> {
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown)
     .await
     .map_err(fail)
 }
@@ -194,14 +202,21 @@ fn summary(config: &Config) -> String {
     )
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("install the SIGTERM handler");
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = term.recv() => {}
-    }
+/// Installs the SIGINT and SIGTERM handlers now, and returns the future that
+/// ends on the first of them. `tokio::signal::ctrl_c` and a handler created
+/// inside the returned future would install only on the first poll, and
+/// axum polls the shutdown future in a task of its own, maybe later. A
+/// signal in between would kill the process without a clean shutdown.
+fn shutdown_signal() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1492,6 +1507,86 @@ mod tests {
         })
         .await;
         assert!(end.is_ok(), "the server did not close the socket");
+    }
+
+    /// The next text message of `kind` on `ws`, within `within`. Other
+    /// messages are skipped: events from the other tests share the driver.
+    async fn next_of_type(ws: &mut Ws, kind: &str, within: Duration) -> Option<Value> {
+        tokio::time::timeout(within, async {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Text(text) = msg {
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    if value["type"] == kind {
+                        return Some(value);
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    #[tokio::test]
+    async fn a_socket_gets_stats_only_while_it_subscribes() {
+        use futures_util::SinkExt;
+        let host = Arc::new(Host::start(TEST_URI).unwrap());
+        let mut conn = host.watch_state();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            conn.wait_for(|s| *s == ConnState::Connected),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut state = AppState::new(
+            Arc::clone(&host),
+            crate::db::Db::in_memory().await,
+            None,
+            vec![],
+            None,
+        );
+        let fast = Duration::from_millis(50);
+        state.stats = crate::stats::Stats::new(Arc::clone(&host), fast);
+        let cookie = log_in_directly(&state).await;
+        let addr = start(state.clone()).await;
+        COOKIES.lock().unwrap().insert(addr.clone(), cookie);
+        let mut ws = open_socket(&addr, "/ws/events").await;
+
+        // Unknown requests start nothing.
+        for text in [
+            r#"{"subscribe":"cpu"}"#,
+            "subscribe stats",
+            r#"{"subscribe":"stats","x":1}"#,
+        ] {
+            ws.send(Message::Text(text.into())).await.unwrap();
+        }
+        assert!(next_of_type(&mut ws, "stats", fast * 4).await.is_none());
+        assert_eq!(state.stats.calls(), 0);
+
+        ws.send(Message::Text(r#"{"subscribe":"stats"}"#.into()))
+            .await
+            .unwrap();
+        let first = next_of_type(&mut ws, "stats", Duration::from_secs(5))
+            .await
+            .expect("stats within 5 seconds");
+        assert!(first["vms"].is_array(), "{first}");
+        assert!(
+            next_of_type(&mut ws, "stats", Duration::from_secs(5))
+                .await
+                .is_some()
+        );
+
+        ws.send(Message::Text(r#"{"unsubscribe":"stats"}"#.into()))
+            .await
+            .unwrap();
+        // A snapshot that was on its way may still arrive. After that, none.
+        let _ = next_of_type(&mut ws, "stats", fast * 2).await;
+        assert!(next_of_type(&mut ws, "stats", fast * 6).await.is_none());
+        let calls = state.stats.calls();
+        tokio::time::sleep(fast * 4).await;
+        assert_eq!(state.stats.calls(), calls, "stats calls went on");
     }
 
     /// A client that reads nothing must not slow the server down. Each

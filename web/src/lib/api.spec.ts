@@ -5,10 +5,29 @@ import {
 	fetchSetupOpen,
 	fetchVms,
 	formatKib,
+	formatRate,
 	keys,
 	problemText,
 	send
 } from './api';
+
+describe('formatRate', () => {
+	it('uses decimal units per second', () => {
+		expect(formatRate(0)).toBe('0 B/s');
+		expect(formatRate(999)).toBe('999 B/s');
+		expect(formatRate(1500)).toBe('1.5 kB/s');
+		expect(formatRate(1_000_000)).toBe('1 MB/s');
+		expect(formatRate(2_345_000_000)).toBe('2.3 GB/s');
+	});
+
+	it('moves up a unit when the rounding reaches 1000', () => {
+		expect(formatRate(999.6)).toBe('1 kB/s');
+		expect(formatRate(999_950)).toBe('1 MB/s');
+		expect(formatRate(999_949)).toBe('999.9 kB/s');
+		expect(formatRate(999_960_000)).toBe('1 GB/s');
+		expect(formatRate(5_000_000_000_000)).toBe('5000 GB/s');
+	});
+});
 
 describe('formatKib', () => {
 	it('uses binary units', () => {

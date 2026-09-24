@@ -30,11 +30,14 @@ Style, naming, and refactoring suggestions are **Nit at most**, always.
 Lodger's reason-for-existing constraints. A change that breaks one is wrong even if
 tests pass — flag it Important:
 
-1. **`unsafe` lives in one place.** Only `crates/lodger-virt/src/events/ffi.rs` may
-   contain `unsafe` (a CI guard enforces the place; check the justification). Every
+1. **`unsafe` lives in 2 audited files.** Only `crates/lodger-virt/src/events/ffi.rs`
+   (the event glue) and `crates/lodger-virt/src/stats/ffi.rs` (the stats call) may
+   contain `unsafe` (a CI guard enforces the places; check the justification). Every
    `unsafe` block has a `// SAFETY:` comment. Event trampolines never block, never call
    libvirt, never panic across `extern "C"`, and never wrap a lent domain pointer in a
-   `virt` type whose `Drop` frees it.
+   `virt` type whose `Drop` frees it. The stats call frees its record list on every
+   path, keeps no pointer into it after the copy, and never wraps a record's domain
+   pointer in a `virt` type.
 2. **One crate touches libvirt.** Only `lodger-virt` imports `virt`. `lodger-core` has no
    system dependencies. Lodger never calls `virt`'s `event_add_handle` or
    `event_add_timeout`, which free the wrong pointer on error (see `docs/virt-pin.md`).

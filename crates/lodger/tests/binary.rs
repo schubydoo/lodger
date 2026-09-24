@@ -223,6 +223,18 @@ fn serve_lists_the_test_driver_vms() {
     server.stop();
 }
 
+/// A supervisor or a test can send SIGTERM as soon as it reads the address
+/// line. The handler must already exist then, or the signal kills the process
+/// without a clean shutdown (exit status 15 instead of 0).
+#[test]
+fn sigterm_right_after_the_address_line_exits_cleanly() {
+    for _ in 0..5 {
+        let (mut server, _) = start();
+        let status = server.stop();
+        assert!(status.success(), "exit status after SIGTERM: {status:?}");
+    }
+}
+
 #[test]
 fn serve_exits_cleanly_on_sigterm() {
     let (mut server, addr) = start();

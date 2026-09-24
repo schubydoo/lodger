@@ -106,6 +106,7 @@ component_management:
         - crates/lodger-core/src/model/network.rs
         - crates/lodger-core/src/model/pool.rs
         - crates/lodger-core/src/model/snapshot.rs
+        - crates/lodger-core/src/model/stats.rs
         - crates/lodger-core/src/model/vm.rs
         - crates/lodger-core/src/model/volume.rs
         - crates/lodger-core/src/password/mod.rs
@@ -119,6 +120,8 @@ component_management:
         - crates/lodger-virt/src/console.rs
         - crates/lodger-virt/src/events/mod.rs
         - crates/lodger-virt/src/power.rs
+        - crates/lodger-virt/src/stats/ffi.rs
+        - crates/lodger-virt/src/stats/mod.rs
         - crates/lodger-virt/src/supervisor.rs
     - component_id: lodger
       name: lodger (server, web assets, CLI)
@@ -140,6 +143,7 @@ component_management:
         - crates/lodger/src/security.rs
         - crates/lodger/src/server.rs
         - crates/lodger/src/setup.rs
+        - crates/lodger/src/stats.rs
         - crates/lodger/src/throttle.rs
         - crates/lodger/src/tickets.rs
         - crates/lodger/src/ws.rs

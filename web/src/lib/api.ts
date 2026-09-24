@@ -23,6 +23,26 @@ export interface Vm {
 	autostart: boolean;
 }
 
+/**
+ * The live stats of one running VM (crates/lodger-core/src/model/stats.rs).
+ * A value is `null` when libvirt did not report it. The rates are `null`
+ * until a second sample exists.
+ */
+export interface VmStats {
+	uuid: string;
+	/** CPU use as a share of the VM's vCPUs: 100 means every vCPU is busy. */
+	cpu_percent: number | null;
+	/** Memory that the guest has now, in KiB. */
+	memory_kib: number | null;
+	/** Memory that the guest uses, in KiB, from the guest's own view. */
+	memory_used_kib: number | null;
+	/** Bytes per second. */
+	disk_read_bps: number | null;
+	disk_write_bps: number | null;
+	net_rx_bps: number | null;
+	net_tx_bps: number | null;
+}
+
 export interface Connection {
 	state: 'connecting' | 'connected' | 'disconnected';
 	error?: string;
@@ -66,7 +86,9 @@ export const keys = {
 	vm: (id: string) => ['vms', id] as const,
 	session: ['session'] as const,
 	setup: ['setup'] as const,
-	accounts: ['accounts'] as const
+	accounts: ['accounts'] as const,
+	/** Live stats. The events socket fills it; nothing fetches it. */
+	stats: ['stats'] as const
 };
 
 /** An error answer, with its status so the app can react to a 401. */
@@ -178,6 +200,22 @@ export const fetchAccounts = (fetcher?: typeof fetch) =>
 
 export const fetchHost = (fetcher?: typeof fetch) => getJson<Host>('/api/host', fetcher);
 export const fetchVms = (fetcher?: typeof fetch) => getJson<Vm[]>('/api/vms', fetcher);
+
+/**
+ * Formats a rate in bytes per second, for example `1.5 MB/s`. It rounds before
+ * it picks the unit, so 999,950 B/s shows as `1 MB/s`, not `1000 kB/s`.
+ */
+export function formatRate(bytesPerSecond: number): string {
+	const units = ['B/s', 'kB/s', 'MB/s', 'GB/s'];
+	const round = (v: number, unit: number) => (unit === 0 ? Math.round(v) : Number(v.toFixed(1)));
+	let unit = 0;
+	let rounded = round(bytesPerSecond, 0);
+	while (rounded >= 1000 && unit < units.length - 1) {
+		unit += 1;
+		rounded = round(bytesPerSecond / 1000 ** unit, unit);
+	}
+	return `${rounded} ${units[unit]}`;
+}
 
 /** Formats KiB with binary units, for example `4 GiB`. */
 export function formatKib(kib: number): string {

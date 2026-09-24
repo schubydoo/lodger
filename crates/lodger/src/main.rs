@@ -16,6 +16,7 @@ mod passwords;
 mod security;
 mod server;
 mod setup;
+mod stats;
 mod throttle;
 mod tickets;
 mod ws;

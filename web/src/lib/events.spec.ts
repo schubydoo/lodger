@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { QueryClient } from '@tanstack/svelte-query';
-import { connectEvents, eventsUrl, invalidationsFor, parseUpdate, retryDelay } from './events';
+import {
+	connectEvents,
+	eventsUrl,
+	invalidationsFor,
+	parseUpdate,
+	retryDelay,
+	wantStats
+} from './events';
 
 const id = '00000000-0000-0000-0000-000000000007';
 
@@ -56,6 +63,10 @@ class FakeSocket {
 	onmessage: ((e: MessageEvent) => void) | null = null;
 	onclose: (() => void) | null = null;
 	closed = false;
+	sent: string[] = [];
+	send(text: string) {
+		this.sent.push(text);
+	}
 	close() {
 		this.closed = true;
 		this.onclose?.();
@@ -73,10 +84,12 @@ async function setup(url: () => Promise<string> = async () => 'ws://test/ws/even
 	const urls: string[] = [];
 	const timers: { fn: () => void; ms: number }[] = [];
 	const invalidateQueries = vi.fn(async () => {});
+	const setQueryData = vi.fn();
+	const removeQueries = vi.fn();
 	const opens: boolean[] = [];
 	const stop = connectEvents({
 		url,
-		client: { invalidateQueries } as unknown as QueryClient,
+		client: { invalidateQueries, setQueryData, removeQueries } as unknown as QueryClient,
 		onOpenChange: (open) => opens.push(open),
 		createSocket: (u) => {
 			urls.push(u);
@@ -87,8 +100,66 @@ async function setup(url: () => Promise<string> = async () => 'ws://test/ws/even
 		setTimer: (fn, ms) => timers.push({ fn, ms })
 	});
 	await settle();
-	return { sockets, urls, timers, invalidateQueries, opens, stop };
+	return { sockets, urls, timers, invalidateQueries, setQueryData, removeQueries, opens, stop };
 }
+
+const SUBSCRIBE = '{"subscribe":"stats"}';
+const UNSUBSCRIBE = '{"unsubscribe":"stats"}';
+
+describe('live stats', () => {
+	it('puts the stats into the query cache, and invalidates nothing', async () => {
+		const t = await setup();
+		t.sockets[0].onopen?.();
+		t.invalidateQueries.mockClear();
+		const vms = [{ uuid: id, cpu_percent: 12.5 }];
+		t.sockets[0].receive(JSON.stringify({ type: 'stats', vms }));
+		expect(t.setQueryData).toHaveBeenCalledWith(['stats'], vms);
+		expect(t.invalidateQueries).not.toHaveBeenCalled();
+		t.stop();
+	});
+
+	it('subscribes while at least one page wants stats', async () => {
+		const t = await setup();
+		t.sockets[0].onopen?.();
+		const first = wantStats();
+		const second = wantStats();
+		expect(t.sockets[0].sent).toEqual([SUBSCRIBE]);
+		first();
+		first();
+		expect(t.sockets[0].sent).toEqual([SUBSCRIBE]);
+		second();
+		expect(t.sockets[0].sent).toEqual([SUBSCRIBE, UNSUBSCRIBE]);
+		expect(t.removeQueries).toHaveBeenCalledWith({ queryKey: ['stats'] });
+		t.stop();
+	});
+
+	it('subscribes when the socket opens, also after a reconnect', async () => {
+		const t = await setup();
+		const release = wantStats();
+		// No open socket yet: nothing goes out, and nothing fails.
+		expect(t.sockets[0].sent).toEqual([]);
+		t.sockets[0].onopen?.();
+		expect(t.sockets[0].sent).toEqual([SUBSCRIBE]);
+		t.sockets[0].onclose?.();
+		t.timers[0].fn();
+		await settle();
+		t.sockets[1].onopen?.();
+		expect(t.sockets[1].sent).toEqual([SUBSCRIBE]);
+		release();
+		expect(t.sockets[1].sent).toEqual([SUBSCRIBE, UNSUBSCRIBE]);
+		t.stop();
+	});
+
+	it('sends nothing to a closed socket', async () => {
+		const t = await setup();
+		t.sockets[0].onopen?.();
+		t.sockets[0].onclose?.();
+		const release = wantStats();
+		release();
+		expect(t.sockets[0].sent).toEqual([]);
+		t.stop();
+	});
+});
 
 describe('connectEvents', () => {
 	it('invalidates the queries that a message names', async () => {
