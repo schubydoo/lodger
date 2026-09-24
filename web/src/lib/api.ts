@@ -114,7 +114,7 @@ async function getJson<T>(path: string, fetcher: typeof fetch = fetch): Promise<
  * `error`, which the pages show as it is.
  */
 export async function send<T>(
-	method: 'POST' | 'DELETE',
+	method: 'POST' | 'PATCH' | 'DELETE',
 	path: string,
 	options: { body?: unknown; csrf?: string; fetcher?: typeof fetch } = {}
 ): Promise<T> {
@@ -155,7 +155,7 @@ export function problemText(error: unknown): string {
 }
 
 /** A power action on a VM (`crates/lodger-virt/src/power.rs`). */
-export type VmAction = 'start' | 'shutdown' | 'force-off';
+export type VmAction = 'start' | 'shutdown' | 'force-off' | 'reboot' | 'pause' | 'resume';
 
 /**
  * Asks for a power action. A 204 means that libvirt took the call: the new
@@ -172,6 +172,61 @@ export function vmAction(
 		csrf: options.csrf,
 		fetcher: options.fetcher
 	});
+}
+
+/** Switches autostart. The inventory refreshes through the events socket. */
+export function setAutostart(
+	id: string,
+	autostart: boolean,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('PATCH', `/api/vms/${id}`, { body: { autostart }, ...options });
+}
+
+/** A disk that a delete kept (`crates/lodger/src/actions.rs`). */
+export interface SkippedDisk {
+	path: string;
+	reason: 'used_by' | 'shared' | 'not_in_pool' | 'failed';
+	/** For `used_by`: the VM that uses the disk. */
+	vm?: string;
+	/** For `failed`: libvirt's message. */
+	message?: string;
+}
+
+/** What a delete did with the VM's disks. */
+export interface Removal {
+	removed: string[];
+	skipped: SkippedDisk[];
+}
+
+/**
+ * Deletes a shut-off VM. `confirm` is the VM's name as the user typed it.
+ * With `removeVolumes`, libvirt also deletes the volumes that no other VM
+ * uses.
+ */
+export function deleteVm(
+	id: string,
+	options: { confirm: string; removeVolumes: boolean; csrf?: string; fetcher?: typeof fetch }
+): Promise<Removal> {
+	return send<Removal>('DELETE', `/api/vms/${id}`, {
+		body: { confirm: options.confirm, remove_volumes: options.removeVolumes },
+		csrf: options.csrf,
+		fetcher: options.fetcher
+	});
+}
+
+/** Why a delete kept a disk, as a clause for a sentence. */
+export function skipText(disk: SkippedDisk): string {
+	switch (disk.reason) {
+		case 'used_by':
+			return `${disk.vm} uses it`;
+		case 'shared':
+			return 'it is read-only or shareable';
+		case 'not_in_pool':
+			return 'no storage pool holds it';
+		case 'failed':
+			return `libvirt refused: ${disk.message}`;
+	}
 }
 
 /** The session, or `null` when nobody is logged in. */

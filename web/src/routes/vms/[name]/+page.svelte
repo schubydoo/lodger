@@ -4,6 +4,7 @@
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import StateBadge from '$lib/components/StateBadge.svelte';
 	import VmActions from '$lib/components/VmActions.svelte';
+	import VmManage from '$lib/components/VmManage.svelte';
 	import { fetchVms, formatKib, formatRate, keys, type VmStats } from '$lib/api';
 	import { wantStats } from '$lib/events';
 
@@ -98,4 +99,6 @@
 			Refreshes every 5 seconds. A dash means that libvirt reports no value yet.
 		</p>
 	{/if}
+
+	<VmManage {vm} />
 {/if}

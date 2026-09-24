@@ -1,8 +1,10 @@
-<!-- Start, Shut down, and Force off for one VM (PRD F4). The buttons ask
-     libvirt and then wait: the new state arrives through the events socket,
-     which refreshes the list. Force off loses unsaved data in the guest, so
-     it asks for the VM's name first, and its button stays disabled until the
-     typed name matches. -->
+<!-- The power buttons for one VM (PRD F4): Start, Shut down, Reboot, Pause,
+     Resume, and Force off. The buttons ask libvirt and then wait: the new
+     state arrives through the events socket, which refreshes the list. Force
+     off loses unsaved data in the guest, so it asks for the VM's name first,
+     and its button stays disabled until the typed name matches. A guest that
+     ignores the ACPI request stays running: after 120 seconds, the row says
+     so and offers Force off. -->
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { Button } from '$lib/components/ui/button';
@@ -19,6 +21,9 @@
 
 	let { vm }: { vm: Vm } = $props();
 
+	/** How long a shutdown may take before the row offers Force off (PRD F4). */
+	const ACPI_PATIENCE_MS = 120_000;
+
 	const client = useQueryClient();
 
 	/** Libvirt can start only a VM that is not active. */
@@ -34,10 +39,22 @@
 	let typed = $state('');
 	/** The state in which a shutdown was requested, until it changes. */
 	let shutdownAskedIn = $state<Vm['state'] | null>(null);
+	/** True when the guest did not shut down within ACPI_PATIENCE_MS. */
+	let ignored = $state(false);
 
 	// A new state from libvirt ends a pending shutdown request.
 	$effect(() => {
 		if (shutdownAskedIn !== null && vm.state !== shutdownAskedIn) shutdownAskedIn = null;
+	});
+
+	// While a shutdown request is pending, wait for the guest.
+	$effect(() => {
+		if (shutdownAskedIn === null) {
+			ignored = false;
+			return;
+		}
+		const timer = setTimeout(() => (ignored = true), ACPI_PATIENCE_MS);
+		return () => clearTimeout(timer);
 	});
 
 	// A VM that stops for another reason closes the Force off field.
@@ -129,6 +146,35 @@
 			>
 				{busy === 'shutdown' ? 'Asking…' : 'Shut down'}
 			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				aria-label="Reboot {vm.name}"
+				disabled={busy !== null}
+				onclick={() => run('reboot')}
+			>
+				{busy === 'reboot' ? 'Asking…' : 'Reboot'}
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				aria-label="Pause {vm.name}"
+				disabled={busy !== null}
+				onclick={() => run('pause')}
+			>
+				{busy === 'pause' ? 'Pausing…' : 'Pause'}
+			</Button>
+		{/if}
+		{#if vm.state === 'paused'}
+			<Button
+				variant="outline"
+				size="sm"
+				aria-label="Resume {vm.name}"
+				disabled={busy !== null}
+				onclick={() => run('resume')}
+			>
+				{busy === 'resume' ? 'Resuming…' : 'Resume'}
+			</Button>
 		{/if}
 		{#if canForceOff}
 			<Button
@@ -143,7 +189,18 @@
 		{/if}
 	{/if}
 </div>
-{#if shutdownAskedIn !== null}
+{#if shutdownAskedIn !== null && ignored}
+	<div role="status" class="mt-1 flex flex-wrap items-center justify-end gap-2 text-sm">
+		<span>
+			{vm.name} did not shut down within 120 seconds. Its guest may ignore the ACPI request.
+		</span>
+		{#if !forcing}
+			<Button variant="outline" size="sm" onclick={() => (forcing = true)}>
+				Force off instead
+			</Button>
+		{/if}
+	</div>
+{:else if shutdownAskedIn !== null}
 	<p role="status" class="mt-1 text-right text-sm text-muted-foreground">
 		Shutdown requested. {vm.name} stops when its guest finishes.
 	</p>

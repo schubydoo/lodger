@@ -135,3 +135,68 @@ describe('the power buttons', () => {
 		await waitFor(() => expect(client.getQueryData(keys.session)).toBeNull());
 	});
 });
+
+describe('reboot, pause, and resume', () => {
+	it('offers Reboot and Pause for a running VM, and Resume for a paused one', async () => {
+		show(running);
+		expect(button('Reboot alpha')).toBeInTheDocument();
+		expect(button('Pause alpha')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Resume alpha' })).toBeNull();
+		show({ ...shutoff, state: 'paused' });
+		expect(button('Resume beta')).toBeInTheDocument();
+		expect(button('Force off beta')).toBeInTheDocument();
+		for (const name of ['Reboot beta', 'Pause beta', 'Shut down beta', 'Start beta']) {
+			expect(screen.queryByRole('button', { name })).toBeNull();
+		}
+	});
+
+	it.each([
+		['Reboot alpha', running, 'reboot'],
+		['Pause alpha', running, 'pause'],
+		['Resume alpha', { ...running, state: 'paused' as const }, 'resume']
+	])('%s sends its action with no body', async (label, vm, action) => {
+		const { fetcher } = show(vm);
+		await fireEvent.click(button(label));
+		await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+		const [path, init] = fetcher.mock.calls[0];
+		expect(path).toBe(`/api/vms/${running.uuid}/actions/${action}`);
+		expect(init?.method).toBe('POST');
+		expect(init?.body).toBeUndefined();
+	});
+});
+
+describe('a guest that ignores the ACPI request', () => {
+	afterEach(() => vi.useRealTimers());
+
+	it('gets a Force off offer after 120 seconds', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		show(running);
+		await fireEvent.click(button('Shut down alpha'));
+		expect(await screen.findByRole('status')).toHaveTextContent('Shutdown requested.');
+		await vi.advanceTimersByTimeAsync(119_999);
+		expect(screen.getByRole('status')).toHaveTextContent('Shutdown requested.');
+		await vi.advanceTimersByTimeAsync(1);
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'alpha did not shut down within 120 seconds. Its guest may ignore the ACPI request.'
+		);
+		await fireEvent.click(button('Force off instead'));
+		expect(screen.getByLabelText('Type alpha to force it off')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Force off instead' })).toBeNull();
+	});
+
+	it('gets no offer when the guest stops in time', async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const { view } = show(running);
+		await fireEvent.click(button('Shut down alpha'));
+		await screen.findByRole('status');
+		await vi.advanceTimersByTimeAsync(60_000);
+		await view.rerender({ props: { props: { vm: { ...running, state: 'shutoff' } } } });
+		await vi.advanceTimersByTimeAsync(120_000);
+		expect(screen.queryByRole('status')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Force off instead' })).toBeNull();
+		// The old timer is gone: a new request waits its own 120 seconds.
+		await view.rerender({ props: { props: { vm: running } } });
+		await fireEvent.click(button('Shut down alpha'));
+		expect(await screen.findByRole('status')).toHaveTextContent('Shutdown requested.');
+	});
+});
