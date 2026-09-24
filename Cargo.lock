@@ -743,6 +743,7 @@ name = "lodger-virt"
 version = "0.0.0"
 dependencies = [
  "lodger-core",
+ "tempfile",
  "thiserror",
  "tokio",
  "uuid",

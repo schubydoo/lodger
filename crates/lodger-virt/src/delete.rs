@@ -56,57 +56,82 @@ impl Virt {
     /// `remove_volumes`, it also deletes the volumes that only this domain
     /// uses. Without it, every disk stays and the report is empty.
     pub async fn delete(&self, id: Uuid, remove_volumes: bool) -> Result<Removal, Error> {
-        self.job(move |c| {
-            let domain = c.lookup_domain_by_uuid(id)?;
-            if domain.is_active()? {
-                return Ok(Err(Error::WrongState("shut the VM down first")));
-            }
-            let mut report = Removal::default();
-            // Read every disk before the undefine: afterwards the XML is gone.
-            let disks = if remove_volumes {
-                let xml = domain.xml_desc(VIR_DOMAIN_XML_INACTIVE)?;
-                match domain_disks(&xml) {
-                    Ok(disks) => resolve(c, disks, &mut report),
-                    Err(e) => return Ok(Err(Error::Xml(e))),
-                }
-            } else {
-                Vec::new()
-            };
-            let users = if disks.is_empty() {
-                HashMap::new()
-            } else {
-                match paths_of_other_domains(c, c.list_all_domains(0)?, id) {
-                    Ok(users) => users,
-                    Err(e) => return Ok(Err(e)),
-                }
-            };
-            undefine(&domain)?;
-            for (path, shared) in disks {
-                let reason = if shared {
-                    Some(SkipReason::Shared)
-                } else if let Some(user) = users.get(&path) {
-                    Some(SkipReason::UsedBy(user.clone()))
-                } else {
-                    match c.lookup_storage_vol_by_path(&path) {
-                        Ok(volume) => volume
-                            .delete(0)
-                            .err()
-                            .map(|e| SkipReason::Failed(e.message().to_owned())),
-                        Err(e) if e.code().known() == Some(ErrorNumber::NoStorageVolume) => {
-                            Some(SkipReason::NotInPool)
-                        }
-                        Err(e) => Some(SkipReason::Failed(e.message().to_owned())),
-                    }
-                };
-                match reason {
-                    None => report.removed.push(path),
-                    Some(reason) => report.skipped.push(Skipped { path, reason }),
-                }
-            }
-            Ok(Ok(report))
-        })
-        .await?
+        self.job(move |c| Ok(delete_on(c, id, remove_volumes, |_| {})))
+            .await?
     }
+}
+
+/// One data disk of the domain to delete.
+struct Target {
+    /// libvirt's path: a pool volume's own path, or the path as written.
+    path: String,
+    /// The same file with symlinks resolved, to compare with other VMs.
+    key: String,
+    shared: bool,
+}
+
+/// The delete itself, on one connection. `before_undefine` runs between the
+/// state check and the undefine; the tests use it to start the domain there.
+fn delete_on(
+    c: &Connect,
+    id: Uuid,
+    remove_volumes: bool,
+    before_undefine: impl FnOnce(&Connect),
+) -> Result<Removal, Error> {
+    let domain = c.lookup_domain_by_uuid(id)?;
+    if domain.is_active()? {
+        return Err(Error::WrongState("shut the VM down first"));
+    }
+    let mut report = Removal::default();
+    // Read every disk before the undefine: afterwards the XML is gone.
+    let targets = if remove_volumes {
+        let xml = domain.xml_desc(VIR_DOMAIN_XML_INACTIVE)?;
+        resolve(c, domain_disks(&xml)?, &mut report)
+    } else {
+        Vec::new()
+    };
+    let users = if targets.is_empty() {
+        HashMap::new()
+    } else {
+        paths_of_other_domains(c, c.list_all_domains(0)?, id)?
+    };
+    before_undefine(c);
+    undefine(&domain)?;
+    // libvirt undefines a running domain too and makes it transient. If the
+    // domain still exists, it started after the state check: its guest may
+    // be writing to every disk now.
+    match c.lookup_domain_by_uuid(id) {
+        Ok(_) => {
+            return Err(Error::WrongState(
+                "the VM started during the delete: libvirt removed its definition, but it runs until it stops, and every disk stays",
+            ));
+        }
+        Err(e) if e.code().known() == Some(ErrorNumber::NoDomain) => {}
+        Err(e) => return Err(e.into()),
+    }
+    for Target { path, key, shared } in targets {
+        let reason = if shared {
+            Some(SkipReason::Shared)
+        } else if let Some(user) = users.get(&key) {
+            Some(SkipReason::UsedBy(user.clone()))
+        } else {
+            match c.lookup_storage_vol_by_path(&path) {
+                Ok(volume) => volume
+                    .delete(0)
+                    .err()
+                    .map(|e| SkipReason::Failed(e.message().to_owned())),
+                Err(e) if e.code().known() == Some(ErrorNumber::NoStorageVolume) => {
+                    Some(SkipReason::NotInPool)
+                }
+                Err(e) => Some(SkipReason::Failed(e.message().to_owned())),
+            }
+        };
+        match reason {
+            None => report.removed.push(path),
+            Some(reason) => report.skipped.push(Skipped { path, reason }),
+        }
+    }
+    Ok(report)
 }
 
 /// Removes the definition with its NVRAM file, managed save image, and
@@ -126,13 +151,17 @@ fn undefine(domain: &Domain) -> Result<(), virt::error::Error> {
     }
 }
 
-/// The host path of each disk, with its `shared` flag. A pool volume that
-/// libvirt cannot find goes to the report as skipped.
-fn resolve(c: &Connect, disks: Vec<Disk>, report: &mut Removal) -> Vec<(String, bool)> {
-    let mut paths = Vec::new();
+/// The targets of the disks. A pool volume that libvirt cannot find goes to
+/// the report as skipped.
+fn resolve(c: &Connect, disks: Vec<Disk>, report: &mut Removal) -> Vec<Target> {
+    let mut targets = Vec::new();
     for disk in disks {
         match path_of(c, &disk.source) {
-            Some(path) => paths.push((path, disk.shared)),
+            Some(path) => targets.push(Target {
+                key: canonical(&path),
+                path,
+                shared: disk.shared,
+            }),
             None => {
                 if let DiskSource::Volume { pool, volume } = disk.source {
                     report.skipped.push(Skipped {
@@ -143,12 +172,19 @@ fn resolve(c: &Connect, disks: Vec<Disk>, report: &mut Removal) -> Vec<(String, 
             }
         }
     }
-    paths
+    targets
 }
 
+/// libvirt's path of a disk: the volume's own path when a pool holds it,
+/// else the path as written.
 fn path_of(c: &Connect, source: &DiskSource) -> Option<String> {
     match source {
-        DiskSource::File(path) | DiskSource::Block(path) => Some(path.clone()),
+        // libvirt's lookup cleans a double slash, but it follows no symlink.
+        DiskSource::File(path) | DiskSource::Block(path) => Some(
+            c.lookup_storage_vol_by_path(path)
+                .and_then(|v| v.path())
+                .unwrap_or_else(|_| path.clone()),
+        ),
         DiskSource::Volume { pool, volume } => c
             .lookup_storage_pool_by_name(pool)
             .and_then(|p| p.lookup_storage_vol_by_name(volume))
@@ -157,10 +193,17 @@ fn path_of(c: &Connect, source: &DiskSource) -> Option<String> {
     }
 }
 
-/// The disk paths of the `domains` other than `id`, each with the name of
-/// one domain that uses it. A running domain counts with its live and its
-/// saved configuration, because a hot-plugged disk is only in the live one.
-/// A domain that disappears during the scan uses no disk any more.
+/// The path with every symlink and `..` resolved, so that two names of one
+/// file compare equal. A path that the file system cannot resolve, such as a
+/// missing file, stays as it is.
+fn canonical(path: &str) -> String {
+    std::fs::canonicalize(path).map_or_else(|_| path.to_owned(), |p| p.display().to_string())
+}
+
+/// The disks of the `domains` other than `id`, each canonical path with the
+/// name of one domain that uses it. A running domain counts with its live
+/// and its saved configuration, because a hot-plugged disk is only in the
+/// live one. A domain that disappears during the scan uses no disk any more.
 fn paths_of_other_domains(
     c: &Connect,
     domains: Vec<Domain>,
@@ -177,7 +220,9 @@ fn paths_of_other_domains(
         for xml in xmls {
             for disk in domain_disks(&xml)? {
                 if let Some(path) = path_of(c, &disk.source) {
-                    users.entry(path).or_insert_with(|| name.clone());
+                    users
+                        .entry(canonical(&path))
+                        .or_insert_with(|| name.clone());
                 }
             }
         }
@@ -402,6 +447,79 @@ mod tests {
             .unwrap();
         assert_eq!(users.get(&used).map(String::as_str), Some("del-scan-user"));
         assert!(domain_exists(&virt, user).await);
+    }
+
+    #[tokio::test]
+    async fn a_vm_that_starts_during_the_delete_keeps_every_disk() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let disk = volume(&virt, "del-race.img").await;
+        let id = define(&virt, "del-race", file_disk(&disk, "vda", "")).await;
+        let result = virt
+            .read(move |c| {
+                // Another client starts the VM after Lodger's state check.
+                let start = |c: &virt::connect::Connect| {
+                    c.lookup_domain_by_uuid(id).unwrap().create().unwrap();
+                };
+                Ok(super::delete_on(c, id, true, start))
+            })
+            .await
+            .unwrap();
+        let err = result.unwrap_err();
+        assert!(err.is_invalid_operation(), "{err}");
+        assert!(err.to_string().contains("every disk stays"), "{err}");
+        assert!(volume_exists(&virt, disk).await);
+        // libvirt keeps the running VM as a transient domain.
+        let transient = virt
+            .read(move |c| {
+                let d = c.lookup_domain_by_uuid(id)?;
+                Ok(d.is_active()? && !d.is_persistent()?)
+            })
+            .await
+            .unwrap();
+        assert!(transient);
+        virt.power(id, crate::Power::ForceOff).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_disk_named_through_a_symlink_counts_as_used() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("disk.img"), b"").unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+        let direct = real.join("disk.img").display().to_string();
+        let linked = dir.path().join("link/disk.img").display().to_string();
+        let a = define(&virt, "del-link-a", file_disk(&direct, "vda", "")).await;
+        let b = define(&virt, "del-link-b", file_disk(&linked, "vda", "")).await;
+        // The deleted VM names the file directly, and the other one through
+        // the symlink.
+        let report = virt.delete(a, true).await.unwrap();
+        assert_eq!(
+            report.skipped,
+            [Skipped {
+                path: direct.clone(),
+                reason: SkipReason::UsedBy("del-link-b".into()),
+            }]
+        );
+        // The other way around.
+        define(&virt, "del-link-a", file_disk(&direct, "vda", "")).await;
+        let report = virt.delete(b, true).await.unwrap();
+        assert_eq!(
+            report.skipped,
+            [Skipped {
+                path: linked,
+                reason: SkipReason::UsedBy("del-link-a".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_path_that_does_not_resolve_stays_as_written() {
+        assert_eq!(
+            super::canonical("/nonexistent/lodger/x.img"),
+            "/nonexistent/lodger/x.img"
+        );
     }
 
     #[tokio::test]
