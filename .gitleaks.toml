@@ -1,0 +1,13 @@
+# Gitleaks configuration. The `secret scan` job in .github/workflows/security.yml
+# reads it from the repository root. The scan covers the full history.
+#
+# The allowlist holds only fake values from tests, each matched exactly.
+# `0123456789abcdef0123456789abcdef` is the fake setup token in the Debug-output
+# test of crates/lodger/src/setup.rs. The generic-api-key rule matches it
+# because the field is named `token`.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake values in tests"
+regexes = ['''^0123456789abcdef0123456789abcdef$''']
