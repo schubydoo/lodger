@@ -28,7 +28,7 @@ function show(p: PoolDetail, respond: () => Response = () => new Response(null, 
 	const client = testClient();
 	client.setQueryData(keys.session, { username: 'admin', csrf_token: 'csrf1' });
 	render(QueryHarness, { props: { client, component: PoolManage, props: { pool: p } } });
-	return { fetcher };
+	return { fetcher, client };
 }
 
 const button = (name: string) => screen.getByRole('button', { name });
@@ -73,7 +73,8 @@ describe('a pool page', () => {
 	});
 
 	it('removes only after the exact name is typed, and keeps the files unless asked', async () => {
-		const { fetcher } = show(pool);
+		const { fetcher, client } = show(pool);
+		const refresh = vi.spyOn(client, 'invalidateQueries');
 		await fireEvent.click(button('Remove images'));
 		const remove = button('Remove');
 		const typeName = (value: string) =>
@@ -85,6 +86,7 @@ describe('a pool page', () => {
 		await typeName('images');
 		await fireEvent.click(remove);
 		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/storage'));
+		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pools });
 		expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE');
 		expect(body(fetcher)).toEqual({ confirm: 'images', delete_files: false });
 	});

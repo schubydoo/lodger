@@ -83,7 +83,8 @@ impl Virt {
 
     /// Removes pool `id`: stops it and undefines it. With `delete_files`, it
     /// first deletes every volume in the pool, and then the pool's folder or
-    /// NFS mount folder.
+    /// NFS mount folder. A transient pool is gone after the stop, so its
+    /// folder stays.
     pub async fn remove_pool(&self, id: Uuid, delete_files: bool) -> Result<(), Error> {
         self.job(move |c| remove_pool_on(c, id, delete_files, |v| v.delete(0), |_| {}))
             .await
@@ -139,13 +140,19 @@ fn remove_pool_on(
         }
     }
     before_stop(&pool);
+    // Read before the stop: libvirt removes a transient pool when it stops,
+    // so its folder cannot be deleted and it has no definition to remove.
+    let persistent = pool.is_persistent()?;
     if pool.is_active()? {
         pool.destroy()?;
     }
-    if delete_files {
-        pool.delete(0)?;
+    if persistent {
+        if delete_files {
+            pool.delete(0)?;
+        }
+        pool.undefine()?;
     }
-    pool.undefine()
+    Ok(())
 }
 
 /// The create itself. `before_start` runs after the build and the autostart;
@@ -459,6 +466,18 @@ mod tests {
         assert!(names.contains(&"pool-kept".to_owned()), "{names:?}");
         assert!(!names.contains(&"pool-gone".to_owned()), "{names:?}");
         virt.remove_pool(kept, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_transient_pool_is_removed_without_an_error() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let xml = dir_xml("pool-transient");
+        let id = virt
+            .job(move |c| c.create_storage_pool_xml(&xml, 0)?.uuid())
+            .await
+            .unwrap();
+        virt.remove_pool(id, true).await.unwrap();
+        assert!(!exists(&virt, "pool-transient").await);
     }
 
     #[tokio::test]

@@ -51,6 +51,7 @@
 		busy = 'remove';
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
+			await client.invalidateQueries({ queryKey: keys.pools });
 			await goto(resolve('/storage'));
 		} catch (e) {
 			failed(e);

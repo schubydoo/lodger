@@ -16,7 +16,7 @@ function show(
 	const client = testClient();
 	client.setQueryData(keys.session, { username: 'admin', csrf_token: 'csrf1' });
 	render(QueryHarness, { props: { client, component: PoolCreate, props: {} } });
-	return { fetcher };
+	return { fetcher, client };
 }
 
 const type = (label: string, value: string) =>
@@ -29,7 +29,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('the New pool form', () => {
 	it('creates a folder pool with autostart and opens its page', async () => {
-		const { fetcher } = show();
+		const { fetcher, client } = show();
+		const refresh = vi.spyOn(client, 'invalidateQueries');
 		const create = screen.getByRole('button', { name: 'Create pool' });
 		expect(create).toBeDisabled();
 		await type('Name', 'images2');
@@ -38,6 +39,9 @@ describe('the New pool form', () => {
 		expect(create).toBeEnabled();
 		await fireEvent.click(create);
 		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/storage/images2'));
+		// The list is fresh before the new page reads it.
+		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pools });
+		expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(nav.goto.mock.invocationCallOrder[0]);
 		const [path, init] = fetcher.mock.calls[0];
 		expect(path).toBe('/api/pools');
 		expect(init?.method).toBe('POST');
