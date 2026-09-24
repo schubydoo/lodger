@@ -67,6 +67,21 @@ pub enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Install Lodger as a systemd service on this host. Needs root.
+    ///
+    /// Checks the host, copies this binary to /usr/local/bin, creates the
+    /// lodger user in the libvirt group, writes /etc/lodger/config.toml if it
+    /// does not exist, writes the unit, and starts the service.
+    Install,
+    /// Stop and remove the Lodger service. Needs root.
+    ///
+    /// Keeps /etc/lodger, /var/lib/lodger, and the lodger user unless --purge
+    /// is given. libvirt keeps every VM, pool, and network.
+    Uninstall {
+        /// Also remove the configuration, the database, and the lodger user.
+        #[arg(long)]
+        purge: bool,
+    },
     /// Print the Lodger version and the libvirt client library version.
     Version,
 }
@@ -206,6 +221,17 @@ mod tests {
             panic!("expected doctor with --config");
         };
         assert_eq!(config.to_str(), Some("/c.toml"));
+    }
+
+    #[test]
+    fn install_takes_no_argument_and_uninstall_takes_purge() {
+        let cli = Cli::try_parse_from(["lodger", "install"]).unwrap();
+        assert!(matches!(cli.command, Command::Install));
+        assert!(Cli::try_parse_from(["lodger", "install", "--purge"]).is_err());
+        let cli = Cli::try_parse_from(["lodger", "uninstall"]).unwrap();
+        assert!(matches!(cli.command, Command::Uninstall { purge: false }));
+        let cli = Cli::try_parse_from(["lodger", "uninstall", "--purge"]).unwrap();
+        assert!(matches!(cli.command, Command::Uninstall { purge: true }));
     }
 
     #[test]

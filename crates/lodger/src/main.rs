@@ -13,6 +13,7 @@ mod config;
 mod console;
 mod db;
 mod doctor;
+mod install;
 mod passwords;
 mod security;
 mod server;
@@ -33,6 +34,10 @@ fn main() {
             ..Default::default()
         })
         .map(|line| println!("{line}")),
+        cli::Command::Install => install::run_install().map(|line| println!("{line}")),
+        cli::Command::Uninstall { purge } => {
+            install::run_uninstall(purge).map(|line| println!("{line}"))
+        }
         cli::Command::Admin {
             action,
             config,
