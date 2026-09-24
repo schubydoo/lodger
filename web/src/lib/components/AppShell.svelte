@@ -44,6 +44,15 @@
 		}
 	});
 
+	// Drop every cached answer once the session ends: on logout, and after a
+	// 401 from an expired session. The next user then sees nothing of this one.
+	// The shell itself needs the session and setup answers, which hold no data.
+	const kept: unknown[] = [keys.session[0], keys.setup[0]];
+	$effect(() => {
+		if (session.isPending || user) return;
+		client.removeQueries({ predicate: (q) => !kept.includes(q.queryKey[0]) });
+	});
+
 	// Assume open until the first close, so the banner does not flash at start.
 	let socketOpen = $state(true);
 
@@ -69,8 +78,6 @@
 			// The session may be gone already. Either way, it is over here.
 		}
 		loggingOut = false;
-		// Drop every cached answer, so the next user sees nothing of this one.
-		client.removeQueries({ predicate: (q) => q.queryKey[0] !== keys.session[0] });
 		client.setQueryData(keys.session, null);
 	}
 

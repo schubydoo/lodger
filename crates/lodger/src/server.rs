@@ -38,6 +38,9 @@ pub struct AppState {
     pub csp: Arc<HeaderValue>,
     /// Live VM stats for the sockets that subscribe.
     pub stats: Stats,
+    /// Lodger serves HTTPS itself, so every response carries HSTS. Behind a
+    /// reverse proxy, the proxy sets it.
+    pub hsts: bool,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
             throttle: Arc::default(),
             tickets: Arc::default(),
             trusted_proxies: Arc::new(trusted_proxies),
+            hsts: false,
         }
     }
 }
@@ -167,13 +171,14 @@ pub async fn serve(config: Config) -> Result<(), String> {
         db.clone(),
         std::time::Duration::from_secs(24 * 60 * 60),
     ));
-    let state = AppState::new(
+    let mut state = AppState::new(
         Arc::new(host),
         db,
         setup,
         config.trusted_proxies.clone(),
         config.public_url.clone(),
     );
+    state.hsts = tls.is_some();
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
@@ -838,6 +843,56 @@ mod tests {
             &claim(&token, "admin", GOOD_PASSWORD).to_string(),
         )
         .await;
+        assert_eq!(status, 201);
+    }
+
+    /// TAD 7.8 and ASVS 3.5.1: a state-changing call without the CSRF
+    /// token, from a wrong Origin, or from a sibling subdomain fails and
+    /// changes nothing. The same call with both checks passes.
+    #[tokio::test]
+    async fn a_change_needs_the_csrf_token_and_the_lodger_origin() {
+        let (addr, token, _state) = serve_setup_at(Some("https://lodger.lan")).await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let body =
+            serde_json::json!({ "username": "second", "password": GOOD_PASSWORD }).to_string();
+        let cookie = format!("Cookie: {}", tab.cookie);
+        let csrf = format!("X-CSRF-Token: {}", tab.csrf);
+        let json = "Content-Type: application/json".to_owned();
+        let refused = [
+            (
+                "no CSRF token",
+                vec![cookie.clone(), SAME_ORIGIN.into(), json.clone()],
+            ),
+            (
+                "a wrong Origin",
+                vec![
+                    cookie.clone(),
+                    csrf.clone(),
+                    "Origin: https://attacker.example".into(),
+                    json.clone(),
+                ],
+            ),
+            (
+                "a sibling subdomain",
+                vec![
+                    cookie.clone(),
+                    csrf.clone(),
+                    "Sec-Fetch-Site: same-site".into(),
+                    "Origin: https://evil.lodger.lan".into(),
+                    json.clone(),
+                ],
+            ),
+        ];
+        for (case, headers) in refused {
+            let (status, _) = raw(&addr, "POST", "/api/accounts", &headers, &body).await;
+            assert_eq!(status, 403, "{case}");
+        }
+        let (_, accounts) = call(&addr, &tab, "GET", "/api/accounts", None).await;
+        assert_eq!(accounts.as_array().unwrap().len(), 1, "nothing changed");
+
+        let allowed = [cookie, csrf, "Origin: https://lodger.lan".into(), json];
+        let (status, _) = raw(&addr, "POST", "/api/accounts", &allowed, &body).await;
         assert_eq!(status, 201);
     }
 

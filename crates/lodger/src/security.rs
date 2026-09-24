@@ -151,6 +151,15 @@ pub async fn add_headers(State(state): State<AppState>, req: Request, next: Next
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
+    // ASVS 3.4.1: at least one year. A browser ignores the header on an IP
+    // address and on a connection with a certificate error, so a
+    // self-signed certificate stays usable.
+    if state.hsts {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
     response
 }
 
