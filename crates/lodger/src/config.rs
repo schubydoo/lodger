@@ -29,9 +29,17 @@ struct File {
     public_url: Option<String>,
     #[serde(default)]
     trusted_proxies: Vec<IpNet>,
-    // No `tls` key yet: Lodger has no built-in TLS. Accepting certificate
-    // paths and ignoring them would mislead, so the key is unknown, and an
-    // unknown key is an error.
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
+}
+
+/// The PEM files for built-in TLS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlsFiles {
+    /// The certificate, followed by any intermediate certificates.
+    pub cert: PathBuf,
+    /// The private key of the first certificate.
+    pub key: PathBuf,
 }
 
 /// The settings that `lodger serve` runs with.
@@ -49,6 +57,8 @@ pub struct Config {
     pub public_url: Option<String>,
     /// Proxies whose `X-Forwarded-For` Lodger trusts (TAD section 7.4).
     pub trusted_proxies: Vec<IpNet>,
+    /// Built-in TLS, when the file names both a certificate and a key.
+    pub tls: Option<TlsFiles>,
 }
 
 /// Command-line values that override the file.
@@ -116,6 +126,12 @@ impl Config {
                 .map(crate::security::origin_of)
                 .transpose()?,
             trusted_proxies: file.trusted_proxies,
+            tls: match (file.tls_cert, file.tls_key) {
+                (Some(cert), Some(key)) => Some(TlsFiles { cert, key }),
+                (None, None) => None,
+                // Half a pair would silently serve plain HTTP.
+                _ => return Err("set both tls_cert and tls_key, or neither".to_owned()),
+            },
         })
     }
 }
@@ -135,7 +151,7 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
 
-    use super::{Config, DEFAULT_STATE_DIR, Overrides};
+    use super::{Config, DEFAULT_STATE_DIR, Overrides, TlsFiles};
 
     fn file(text: &str) -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();
@@ -158,6 +174,7 @@ mod tests {
         assert_eq!(c.uri, "qemu:///system");
         assert_eq!(c.state_dir, PathBuf::from(DEFAULT_STATE_DIR));
         assert!(c.public_url.is_none() && c.trusted_proxies.is_empty());
+        assert!(c.tls.is_none());
     }
 
     #[test]
@@ -169,6 +186,8 @@ mod tests {
             state_dir = "/srv/lodger"
             public_url = "https://lodger.lan"
             trusted_proxies = ["172.17.0.0/16", "127.0.0.1/32"]
+            tls_cert = "/etc/lodger/tls/cert.pem"
+            tls_key = "/etc/lodger/tls/key.pem"
             "#,
         );
         let c = Config::load(with_config(f.path().into()), None).unwrap();
@@ -177,6 +196,13 @@ mod tests {
         assert_eq!(c.state_dir, PathBuf::from("/srv/lodger"));
         assert_eq!(c.public_url.as_deref(), Some("https://lodger.lan"));
         assert_eq!(c.trusted_proxies.len(), 2);
+        assert_eq!(
+            c.tls,
+            Some(TlsFiles {
+                cert: "/etc/lodger/tls/cert.pem".into(),
+                key: "/etc/lodger/tls/key.pem".into(),
+            })
+        );
     }
 
     #[test]
@@ -212,10 +238,12 @@ mod tests {
     }
 
     #[test]
-    fn tls_is_not_supported_yet() {
-        let f = file("[tls]\ncert = \"/c.pem\"\nkey = \"/k.pem\"");
-        let err = Config::load(with_config(f.path().into()), None).unwrap_err();
-        assert!(err.contains("tls"), "{err}");
+    fn half_a_tls_pair_is_an_error() {
+        for text in ["tls_cert = \"/c.pem\"", "tls_key = \"/k.pem\""] {
+            let f = file(text);
+            let err = Config::load(with_config(f.path().into()), None).unwrap_err();
+            assert_eq!(err, "set both tls_cert and tls_key, or neither", "{text}");
+        }
     }
 
     #[test]

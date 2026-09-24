@@ -23,6 +23,7 @@ mod setup;
 mod stats;
 mod throttle;
 mod tickets;
+mod tls;
 mod ws;
 
 use clap::Parser;

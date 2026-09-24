@@ -2,8 +2,9 @@
 # After a change, run: sudo systemctl restart lodger
 # `lodger install` writes this file only if it does not exist.
 
-# The address and port to listen on. Keep a loopback address, and put a
-# reverse proxy with TLS in front of Lodger for remote access.
+# The address and port to listen on. Keep a loopback address unless TLS is
+# on. For remote access, set tls_cert and tls_key below, or put a reverse
+# proxy with TLS in front of Lodger.
 listen = "127.0.0.1:8460"
 
 # The libvirt connection.
@@ -15,3 +16,9 @@ uri = "qemu:///system"
 
 # The proxies whose X-Forwarded-For header Lodger trusts.
 # trusted_proxies = ["127.0.0.1/32"]
+
+# Built-in TLS: the PEM certificate (with any intermediate certificates) and
+# its private key. Set both or neither. The lodger user must be able to read
+# them. With TLS on, a LAN address such as "192.168.1.10:8460" is safe.
+# tls_cert = "/etc/lodger/tls/cert.pem"
+# tls_key = "/etc/lodger/tls/key.pem"

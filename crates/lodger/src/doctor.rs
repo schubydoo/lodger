@@ -6,8 +6,9 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
-use crate::config::{Config, Overrides};
+use crate::config::{Config, Overrides, TlsFiles};
 
 /// The socket of the monolithic `libvirtd` or of `virtproxyd`, and the socket
 /// of the modular `virtqemud`.
@@ -23,6 +24,8 @@ const SELINUX_ENFORCE: &str = "sys/fs/selinux/enforce";
 const SELINUX_NFS: &str = "sys/fs/selinux/booleans/virt_use_nfs";
 /// The first libvirt that reverts external snapshots (PRD R5).
 const REVERT_VERSION: (u32, u32, u32) = (9, 9, 0);
+/// Doctor fails this long before the TLS certificate expires (Task 3.17).
+const TLS_WARNING: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -68,6 +71,7 @@ impl Check {
 pub fn run(overrides: Overrides) -> Result<String, String> {
     let config = Config::load(overrides, None)?;
     let mut checks = host_checks(Path::new("/"));
+    checks.push(tls_certificate(config.tls.as_ref(), SystemTime::now()));
     checks.extend(
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -81,6 +85,40 @@ pub fn run(overrides: Overrides) -> Result<String, String> {
         Ok(summary)
     } else {
         Err(summary)
+    }
+}
+
+/// The built-in TLS pair: it must load, and it must not expire within
+/// `TLS_WARNING`.
+fn tls_certificate(tls: Option<&TlsFiles>, now: SystemTime) -> Check {
+    const NAME: &str = "TLS certificate";
+    const FIX: &str = "replace the certificate and key named by tls_cert and tls_key in \
+                       /etc/lodger/config.toml, then run: sudo systemctl restart lodger";
+    let Some(files) = tls else {
+        return Check::skip(
+            NAME,
+            "TLS is off: the configuration sets no tls_cert and tls_key",
+        );
+    };
+    if let Err(e) = crate::tls::server_config(files) {
+        return Check::fail(NAME, e, &[FIX]);
+    }
+    let not_after = match crate::tls::not_after(&files.cert) {
+        Ok(t) => t,
+        Err(e) => return Check::fail(NAME, e, &[FIX]),
+    };
+    let cert = files.cert.display();
+    let end = not_after.to_system_time();
+    if end <= now {
+        Check::fail(NAME, format!("{cert} expired on {not_after}"), &[FIX])
+    } else if end <= now + TLS_WARNING {
+        Check::fail(
+            NAME,
+            format!("{cert} expires on {not_after}, in less than 30 days"),
+            &[FIX],
+        )
+    } else {
+        Check::pass(NAME, format!("{cert} is valid until {not_after}"))
     }
 }
 
@@ -522,5 +560,67 @@ mod tests {
             "PASS  a: fine\nFAIL  b: broken\n      fix: cmd one\n      fix: cmd two\nSKIP  c: not here\n"
         );
         assert_eq!(summary(&checks), "1 passed, 1 failed, 1 skipped");
+    }
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    #[test]
+    fn tls_is_skipped_when_off() {
+        let check = tls_certificate(None, SystemTime::now());
+        assert_eq!(check.outcome, Outcome::Skip, "{}", check.reason);
+    }
+
+    #[test]
+    fn tls_fails_30_days_before_the_certificate_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = crate::tls::test_pair::write(dir.path(), "a", (2031, 1, 1));
+        let end = crate::tls::not_after(&files.cert).unwrap().to_system_time();
+
+        let early = tls_certificate(Some(&files), end - 31 * DAY);
+        assert_eq!(early.outcome, Outcome::Pass, "{}", early.reason);
+        assert!(
+            early
+                .reason
+                .ends_with("is valid until 2031-01-01T00:00:00Z"),
+            "{}",
+            early.reason
+        );
+
+        for now in [end - 30 * DAY, end - DAY] {
+            let soon = tls_certificate(Some(&files), now);
+            assert_eq!(soon.outcome, Outcome::Fail, "{}", soon.reason);
+            assert!(
+                soon.reason.contains("in less than 30 days"),
+                "{}",
+                soon.reason
+            );
+            assert!(soon.fix[0].contains("sudo systemctl restart lodger"));
+        }
+
+        let late = tls_certificate(Some(&files), end + DAY);
+        assert_eq!(late.outcome, Outcome::Fail, "{}", late.reason);
+        assert!(
+            late.reason.ends_with("expired on 2031-01-01T00:00:00Z"),
+            "{}",
+            late.reason
+        );
+    }
+
+    #[test]
+    fn tls_fails_when_the_pair_does_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = crate::tls::test_pair::write(dir.path(), "a", (2031, 1, 1));
+        let b = crate::tls::test_pair::write(dir.path(), "b", (2031, 1, 1));
+        let mixed = TlsFiles {
+            cert: a.cert,
+            key: b.key,
+        };
+        let check = tls_certificate(Some(&mixed), SystemTime::now());
+        assert_eq!(check.outcome, Outcome::Fail, "{}", check.reason);
+        assert!(
+            check.reason.starts_with("cannot use the TLS certificate"),
+            "{}",
+            check.reason
+        );
     }
 }

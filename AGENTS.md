@@ -40,8 +40,8 @@ Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
 - `crates/lodger`: the server binary. axum routes are in `server.rs`. Sessions, login,
   and the CSRF check are in `auth.rs` (`require_session`), and the throttle is in
   `throttle.rs`. The Origin rule and the security headers are in `security.rs`. The
-  SQLite store is `db/`, and the audit log is `audit.rs`.
-  `admin.rs` is the root-only recovery CLI.
+  SQLite store is `db/`, and the audit log is `audit.rs`. Built-in TLS (rustls with
+  the `ring` provider) is in `tls.rs`. `admin.rs` is the root-only recovery CLI.
 - `web/`: a SvelteKit 2 single-page app with Svelte 5, shadcn-svelte, and TanStack
   Query. `src/lib/api.ts` is the API client, and `src/lib/events.ts` refreshes queries
   from the `/ws/events` socket.

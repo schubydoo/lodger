@@ -146,6 +146,12 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
 /// cannot be reached does not stop the server: the API reports it as
 /// disconnected. A database that cannot be opened does.
 pub async fn serve(config: Config) -> Result<(), String> {
+    // First, so that a bad certificate stops the start before anything else.
+    let tls = config
+        .tls
+        .as_ref()
+        .map(crate::tls::server_config)
+        .transpose()?;
     let db = Db::open(&config.state_dir).await?;
     tokio::task::spawn_blocking(crate::passwords::prepare)
         .await
@@ -172,27 +178,42 @@ pub async fn serve(config: Config) -> Result<(), String> {
         shutdown_signal().map_err(|e| format!("cannot install the signal handlers: {e}"))?;
     // stdout carries only the address line, which scripts and tests read.
     // Everything else goes to stderr, which systemd sends to the journal.
+    let scheme = if tls.is_some() { "https" } else { "http" };
     println!(
-        "lodger listening on http://{}",
+        "lodger listening on {scheme}://{}",
         listener.local_addr().map_err(fail)?
     );
     eprintln!("{}", summary(&config));
-    if !listen.ip().is_loopback() {
-        // TAD section 7.4: Lodger has no built-in TLS, so passwords and
-        // session cookies would cross the network in clear text. Browsers
-        // also keep the Secure session cookie only over HTTPS or loopback.
+    if !listen.ip().is_loopback() && tls.is_none() {
+        // TAD section 7.4: without TLS, passwords and session cookies would
+        // cross the network in clear text. Browsers also keep the Secure
+        // session cookie only over HTTPS or loopback.
         eprintln!(
-            "lodger: WARNING: listening on {listen}, which is not loopback. Put Lodger behind a \
-             reverse proxy with TLS and listen on 127.0.0.1 instead."
+            "lodger: WARNING: listening on {listen}, which is not loopback, without TLS. Set \
+             tls_cert and tls_key, or put Lodger behind a reverse proxy with TLS and listen on \
+             127.0.0.1 instead."
         );
     }
     // The TCP peer's address, which the login's client-IP rule needs.
-    axum::serve(
-        listener,
-        router(state).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await
+    let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
+    match tls {
+        Some(tls) => {
+            use axum::serve::ListenerExt;
+            // `tap_io` does nothing to the stream. axum gives a custom
+            // listener the peer address for `ConnectInfo` only in this wrapper.
+            let listener = crate::tls::TlsListener::new(listener, tls)
+                .map_err(fail)?
+                .tap_io(|_| {});
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+        }
+        None => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+        }
+    }
     .map_err(fail)
 }
 
@@ -212,11 +233,15 @@ async fn open_setup(db: &Db) -> Result<Option<SetupToken>, String> {
 /// One line that says which settings are in force.
 fn summary(config: &Config) -> String {
     format!(
-        "lodger: libvirt {}, state directory {}, public URL {}, {} trusted proxies",
+        "lodger: libvirt {}, state directory {}, public URL {}, {} trusted proxies, TLS {}",
         config.uri,
         config.state_dir.display(),
         config.public_url.as_deref().unwrap_or("not set"),
-        config.trusted_proxies.len()
+        config.trusted_proxies.len(),
+        config
+            .tls
+            .as_ref()
+            .map_or_else(|| "off".to_owned(), |t| t.cert.display().to_string())
     )
 }
 
