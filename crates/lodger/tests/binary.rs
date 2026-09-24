@@ -306,13 +306,14 @@ type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 /// Starts `lodger serve` on `state` and returns the process, the address, and
 /// the setup token from the log, if one was written.
 fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
-    let (child, addr, token, _) = serve_logged(state);
+    let (child, addr, token, _) = serve_logged(state, TEST_URI);
     (child, addr, token)
 }
 
-fn serve_logged(state: &std::path::Path) -> (Child, String, Option<String>, Log) {
+/// Like [`serve_on`], on libvirt `uri`, and with the log lines after the start.
+fn serve_logged(state: &std::path::Path, uri: &str) -> (Child, String, Option<String>, Log) {
     let mut child = lodger()
-        .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
+        .args(["serve", "--listen", "127.0.0.1:0", "--uri", uri])
         .arg("--state-dir")
         .arg(state)
         .stdout(Stdio::piped())
@@ -486,7 +487,7 @@ fn login(addr: &str, username: &str, password: &str) -> Option<String> {
 #[test]
 fn the_sixth_failed_login_waits_and_every_failure_is_logged() {
     let dir = tempfile::tempdir().unwrap();
-    let (child, addr, token, log) = serve_logged(&dir.path().join("state"));
+    let (child, addr, token, log) = serve_logged(&dir.path().join("state"), TEST_URI);
     let mut server = Server {
         child,
         state: tempfile::tempdir().unwrap(),
@@ -732,34 +733,8 @@ fn the_vm_list_answers_200_vms_with_a_p95_under_1_second() {
     std::fs::write(&file, node).unwrap();
     let uri = format!("test://{}", file.display());
 
-    let mut child = lodger()
-        .args(["serve", "--listen", "127.0.0.1:0", "--uri", &uri])
-        .arg("--state-dir")
-        .arg(dir.path().join("state"))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("lodger serve starts");
-    let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let addr = line
-        .trim()
-        .strip_prefix("lodger listening on http://")
-        .unwrap_or_else(|| panic!("unexpected first line: {line}"))
-        .to_string();
-    let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
-    let token = stderr
-        .by_ref()
-        .map(Result::unwrap)
-        .find_map(|l| {
-            l.strip_prefix("lodger: setup token: ")
-                .map(|rest| rest.split_whitespace().next().unwrap().to_owned())
-        })
-        .expect("a setup token");
-    // Keep reading, so a full pipe never blocks the server.
-    std::thread::spawn(move || stderr.for_each(drop));
+    let (child, addr, token, _) = serve_logged(&dir.path().join("state"), &uri);
+    let token = token.expect("a setup token");
     let mut server = Server {
         child,
         state: tempfile::tempdir().unwrap(),
