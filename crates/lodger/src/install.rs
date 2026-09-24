@@ -368,7 +368,21 @@ fn foreign_pair(host: &Host) -> Option<String> {
     let (cert, key) = (host.path(TLS_CERT), host.path(TLS_KEY));
     let move_away = "To use a self-signed pair instead, move it away first.";
     match std::fs::read(&cert) {
-        Ok(pem) if crate::tls::made_by_lodger(&pem) => None,
+        // A key next to Lodger's certificate may still be a new one that an
+        // operator copied first: replace it only if it belongs to that
+        // certificate.
+        Ok(pem) if crate::tls::made_by_lodger(&pem) => (key.exists()
+            && crate::tls::server_config(&TlsFiles {
+                cert: cert.clone(),
+                key: key.clone(),
+            })
+            .is_err())
+        .then(|| {
+            format!(
+                "/{TLS_KEY} does not belong to the self-signed certificate in /{TLS_CERT}. \
+                 {move_away}"
+            )
+        }),
         Ok(_) => Some(format!(
             "/{TLS_CERT} holds a certificate that Lodger did not make. {move_away}"
         )),
@@ -1340,6 +1354,36 @@ mod tests {
             "{err}"
         );
         assert_eq!(read(&host, TLS_KEY), key_before);
+
+        // Lodger's own certificate next to a new key that an operator copied
+        // first: the key does not belong to it, so it stays.
+        let ours = crate::tls::self_signed("192.168.1.10", SystemTime::now()).unwrap();
+        put(&host, TLS_CERT, &ours.cert_pem);
+        let err = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("/etc/lodger/tls/key.pem does not belong to the self-signed certificate"),
+            "{err}"
+        );
+        assert_eq!(read(&host, TLS_KEY), key_before);
+        assert!(run.calls.is_empty());
+
+        // Lodger's certificate with no key is fine: nothing can be lost.
+        std::fs::remove_file(host.path(TLS_KEY)).unwrap();
+        install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap();
     }
 
     #[test]
