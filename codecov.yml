@@ -112,6 +112,7 @@ component_management:
         - crates/lodger-core/src/password/mod.rs
         - crates/lodger-core/src/validate.rs
         - crates/lodger-core/src/xml/mod.rs
+        - crates/lodger-core/src/xml/network.rs
         - crates/lodger-core/src/xml/pool.rs
     - component_id: lodger-virt
       name: lodger-virt (libvirt adapter)

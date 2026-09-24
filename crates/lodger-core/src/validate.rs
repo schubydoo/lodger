@@ -80,6 +80,31 @@ pub enum InputError {
     },
     #[error("pool {other_name:?} mounts this NFS export already")]
     NfsExportInUse { other_name: String },
+    #[error("{field} must be 1 to 15 letters, digits, '.', '_', or '-'")]
+    InterfaceName { field: &'static str },
+    #[error(
+        "there is no bridge {name:?} on this host. A host bridge must exist first: create it on the host, for example with NetworkManager or systemd-networkd, then pick it here"
+    )]
+    NoSuchBridge { name: String },
+}
+
+/// The longest Linux interface name (`IFNAMSIZ` minus the NUL byte).
+pub const INTERFACE_MAX_LEN: usize = 15;
+
+/// Checks a Linux network interface name, such as a host bridge `br0`.
+pub fn parse_interface(field: &'static str, value: &str) -> Result<String, InputError> {
+    check_text(field, value)?;
+    let fine = !value.is_empty()
+        && value.len() <= INTERFACE_MAX_LEN
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !matches!(value, "." | "..");
+    if fine {
+        Ok(value.to_owned())
+    } else {
+        Err(InputError::InterfaceName { field })
+    }
 }
 
 /// The longest path Lodger accepts, as Linux `PATH_MAX`.

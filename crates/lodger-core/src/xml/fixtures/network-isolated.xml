@@ -1,0 +1,18 @@
+<network>
+  <name>lab</name>
+  <uuid>6bae123c-3ffe-4634-b518-bbd213f24e3f</uuid>
+  <bridge name='virbr1' stp='on' delay='0'/>
+  <mac address='52:54:00:59:b3:23'/>
+  <domain name='lab.internal' localOnly='yes'/>
+  <dns>
+    <host ip='10.77.0.10'>
+      <hostname>db</hostname>
+    </host>
+  </dns>
+  <ip address='10.77.0.1' prefix='24'>
+    <dhcp>
+      <range start='10.77.0.2' end='10.77.0.254'/>
+      <host mac='52:54:00:aa:bb:cc' name='db' ip='10.77.0.10'/>
+    </dhcp>
+  </ip>
+</network>
