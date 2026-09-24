@@ -64,8 +64,9 @@ jobs:
             python3 -m http.server 8999 --bind 127.0.0.1 --directory "mirror/$case" >/dev/null 2>&1 &
             server=$!
             sleep 1
-            # pipefail makes the pipeline fail when install.sh fails.
-            if sudo VERSION="$TAG" LODGER_BASE_URL=http://127.0.0.1:8999 bash install.sh 2>&1 | tee "out-$case.txt" >/dev/null; then
+            # pipefail makes the pipeline fail when install.sh fails. sudo
+            # resets PATH, so pass it on: root must find cosign too.
+            if sudo env PATH="$PATH" VERSION="$TAG" LODGER_BASE_URL=http://127.0.0.1:8999 bash install.sh 2>&1 | tee "out-$case.txt" >/dev/null; then
               cat "out-$case.txt"
               echo "::error::install.sh accepted the tampered mirror '$case'"
               exit 1
@@ -122,6 +123,11 @@ jobs:
           set -euo pipefail
           docker run -d --name smoke --privileged --cgroupns=host \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock lodger-smoke
+          # systemctl fails until systemd opens its socket, so wait for it.
+          for _ in $(seq 60); do
+            docker exec smoke test -S /run/systemd/private && break
+            sleep 1
+          done
           # "degraded" is fine: a container lacks some hardware units.
           docker exec smoke systemctl is-system-running --wait || true
           docker exec smoke sh -c 'systemctl enable --now libvirtd.socket 2>/dev/null || systemctl enable --now virtqemud.socket'
