@@ -92,6 +92,9 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/src" -w /src -e HOST_UID="$(id -u)"
           "$ROCKY_IMAGE" scripts/release/build.sh
+      # Outside the container, which has no step summary to write to.
+      - name: Check the binary size
+        run: scripts/release/check-size.sh target/release/lodger
       - name: Package the archive
         run: |
           set -euo pipefail
