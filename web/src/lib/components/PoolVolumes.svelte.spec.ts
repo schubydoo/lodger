@@ -120,13 +120,26 @@ describe('the volumes of a pool', () => {
 		expect(init?.method).toBe('DELETE');
 	});
 
+	it('refetches the list on each visit, even with a cached one', async () => {
+		const fetcher = vi.fn<typeof fetch>(async () => json([volume('fresh.img')]));
+		vi.stubGlobal('fetch', fetcher);
+		const client = testClient();
+		client.setQueryData(keys.volumes(pool.uuid), [volume('stale.img')]);
+		render(QueryHarness, { props: { client, component: PoolVolumes, props: { pool } } });
+		expect(await screen.findByText('fresh.img')).toBeInTheDocument();
+		expect(fetcher.mock.calls[0][0]).toBe(`/api/pools/${pool.uuid}/volumes`);
+	});
+
 	it('shows the server error, for example a VM that uses the volume', async () => {
-		show([volume('disk1.qcow2')], () => json({ error: 'in use by web' }, 409));
+		const { client } = show([volume('disk1.qcow2')], () => json({ error: 'in use by web' }, 409));
+		const refresh = vi.spyOn(client, 'invalidateQueries');
 		await fireEvent.click(await screen.findByRole('button', { name: 'Delete disk1.qcow2' }));
 		await fireEvent.input(screen.getByLabelText('Type disk1.qcow2 to delete it'), {
 			target: { value: 'disk1.qcow2' }
 		});
 		await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 		expect(await screen.findByText('In use by web.')).toBeInTheDocument();
+		// The table catches up with the error.
+		await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pool(pool.uuid) }));
 	});
 });

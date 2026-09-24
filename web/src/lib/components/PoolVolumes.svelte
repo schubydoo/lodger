@@ -29,9 +29,12 @@
 
 	const client = useQueryClient();
 	const csrf = () => client.getQueryData<Session | null>(keys.session)?.csrf_token;
+	// Refetch on each visit: a VM event does not refresh this list, and a VM
+	// define or undefine changes the users of a volume.
 	const volumes = createQuery(() => ({
 		queryKey: keys.volumes(pool.uuid),
-		queryFn: () => fetchVolumes(pool.uuid)
+		queryFn: () => fetchVolumes(pool.uuid),
+		refetchOnMount: 'always'
 	}));
 
 	let name = $state('');
@@ -85,6 +88,8 @@
 			await refresh();
 		} catch (e) {
 			failed(e);
+			// A VM that started to use the volume after the list loaded: show it.
+			if (e instanceof ApiError && e.status === 409) await refresh();
 		} finally {
 			busy = null;
 		}
