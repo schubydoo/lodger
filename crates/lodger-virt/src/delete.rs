@@ -177,7 +177,7 @@ fn resolve(c: &Connect, disks: Vec<Disk>, report: &mut Removal) -> Vec<Target> {
 
 /// libvirt's path of a disk: the volume's own path when a pool holds it,
 /// else the path as written.
-fn path_of(c: &Connect, source: &DiskSource) -> Option<String> {
+pub(crate) fn path_of(c: &Connect, source: &DiskSource) -> Option<String> {
     match source {
         // libvirt's lookup cleans a double slash, but it follows no symlink.
         DiskSource::File(path) | DiskSource::Block(path) => Some(
@@ -196,7 +196,7 @@ fn path_of(c: &Connect, source: &DiskSource) -> Option<String> {
 /// The path with every symlink and `..` resolved, so that two names of one
 /// file compare equal. A path that the file system cannot resolve, such as a
 /// missing file, stays as it is.
-fn canonical(path: &str) -> String {
+pub(crate) fn canonical(path: &str) -> String {
     std::fs::canonicalize(path).map_or_else(|_| path.to_owned(), |p| p.display().to_string())
 }
 

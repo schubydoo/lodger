@@ -8,6 +8,7 @@
 
 pub mod network;
 pub mod pool;
+pub mod volume;
 
 use xmltree::{Element, EmitterConfig, XMLNode};
 
@@ -61,6 +62,19 @@ pub(crate) fn text_element(name: &str, text: &str) -> Element {
 }
 
 /// A new element with attributes in the given order.
+/// The text of the first child element `name`, such as the `web` of
+/// `<name>web</name>`.
+pub(crate) fn child_text<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
+    element
+        .get_child(name)?
+        .children
+        .iter()
+        .find_map(|n| match n {
+            XMLNode::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+}
+
 pub(crate) fn element_with(name: &str, attributes: &[(&str, &str)]) -> Element {
     let mut element = Element::new(name);
     for (key, value) in attributes {

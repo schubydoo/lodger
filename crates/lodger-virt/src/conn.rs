@@ -47,6 +47,10 @@ pub enum Error {
     /// start of a running domain.
     #[error("{0}")]
     WrongState(&'static str),
+    /// The object is in use. The field holds the names of the VMs that use
+    /// it, sorted.
+    #[error("in use by {}", .0.join(", "))]
+    InUse(Vec<String>),
     /// libvirt returned XML that Lodger cannot read.
     #[error(transparent)]
     Xml(#[from] lodger_core::xml::XmlError),
@@ -55,9 +59,9 @@ pub enum Error {
 impl Error {
     /// `true` when libvirt has no domain, pool, or network with that ID.
     pub fn is_not_found(&self) -> bool {
-        use virt::error::ErrorNumber::{NoDomain, NoNetwork, NoStoragePool};
+        use virt::error::ErrorNumber::{NoDomain, NoNetwork, NoStoragePool, NoStorageVolume};
         matches!(self, Self::Libvirt(e)
-            if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool)))
+            if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool | NoStorageVolume)))
     }
 
     /// The cause and the fix of a known libvirt error (`errors.rs`). It

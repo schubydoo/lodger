@@ -343,6 +343,8 @@ pub(crate) async fn audited(
         Err(e) => {
             let (reason, code) = if e.is_not_found() {
                 (not_found.reason, StatusCode::NOT_FOUND)
+            } else if matches!(e, lodger_virt::Error::InUse(_)) {
+                ("in_use", StatusCode::CONFLICT)
             } else if e.is_invalid_operation() {
                 ("wrong_state", StatusCode::CONFLICT)
             } else {

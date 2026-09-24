@@ -124,6 +124,13 @@ impl Entry {
         self
     }
 
+    /// The storage volume that the change touched, as `pool/volume`.
+    pub fn target_volume(mut self, pool: &str, volume: &str) -> Self {
+        self.target_kind = Some("volume");
+        self.target = Some(format!("{pool}/{volume}"));
+        self
+    }
+
     /// The virtual network that the change touched.
     pub fn target_network(mut self, name: impl Into<String>) -> Self {
         self.target_kind = Some("network");

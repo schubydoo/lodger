@@ -6,7 +6,7 @@
 
 use xmltree::{Element, XMLNode};
 
-use super::{XmlError, element_with, parse, text_element, write};
+use super::{XmlError, child_text, element_with, parse, text_element, write};
 use crate::validate::{InputError, Name, parse_host, parse_path};
 
 /// System folders that must never hold a pool, and no folder below them:
@@ -188,17 +188,6 @@ impl PoolXml {
     pub fn to_xml(&self) -> String {
         write(&self.0)
     }
-}
-
-fn child_text<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
-    element
-        .get_child(name)?
-        .children
-        .iter()
-        .find_map(|n| match n {
-            XMLNode::Text(text) => Some(text.as_str()),
-            _ => None,
-        })
 }
 
 #[cfg(test)]

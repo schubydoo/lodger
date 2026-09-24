@@ -11,6 +11,7 @@ mod pool;
 mod power;
 mod stats;
 mod supervisor;
+mod volume;
 
 pub use cache::Inventory;
 pub use conn::{Error, Virt};

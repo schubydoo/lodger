@@ -8,9 +8,13 @@ pub struct Volume {
     pub key: String,
     pub path: String,
     pub kind: VolumeKind,
+    /// The disk format, such as `qcow2` or `raw`, if libvirt names one.
+    pub format: Option<String>,
     /// Sizes in bytes. A sparse or qcow2 file allocates less than its capacity.
     pub capacity_bytes: u64,
     pub allocation_bytes: u64,
+    /// The VMs with a disk on this volume, sorted by name.
+    pub used_by: Vec<String>,
 }
 
 /// The type of a volume (`virStorageVolType`).

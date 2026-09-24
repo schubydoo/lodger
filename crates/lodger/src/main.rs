@@ -24,6 +24,7 @@ mod stats;
 mod throttle;
 mod tickets;
 mod tls;
+mod volumes;
 mod ws;
 
 use clap::Parser;
