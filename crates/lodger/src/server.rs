@@ -1646,6 +1646,13 @@ mod tests {
         assert_eq!(list.as_array().unwrap().len(), 1, "nothing changed: {list}");
         let unknown = format!("/api/pools/{}/volumes", Uuid::nil());
         assert_eq!(call(&addr, &tab, "GET", &unknown, None).await.0, 404);
+        // A NUL byte in the URL's name is refused before libvirt sees it.
+        let (status, answer) = call(&addr, &tab, "DELETE", &format!("{url}/a%00b"), None).await;
+        assert_eq!(status, 422, "{answer}");
+        assert!(
+            answer["error"].as_str().unwrap().contains("NUL"),
+            "{answer}"
+        );
 
         // A volume that a VM uses stays, and the answer names the VM.
         let outside = Virt::open(TEST_URI).await.unwrap();

@@ -61,7 +61,6 @@ pub(crate) fn text_element(name: &str, text: &str) -> Element {
     element
 }
 
-/// A new element with attributes in the given order.
 /// The text of the first child element `name`, such as the `web` of
 /// `<name>web</name>`.
 pub(crate) fn child_text<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
@@ -75,6 +74,7 @@ pub(crate) fn child_text<'a>(element: &'a Element, name: &str) -> Option<&'a str
         })
 }
 
+/// A new element with attributes in the given order.
 pub(crate) fn element_with(name: &str, attributes: &[(&str, &str)]) -> Element {
     let mut element = Element::new(name);
     for (key, value) in attributes {
@@ -123,6 +123,24 @@ pub fn domain_disks(xml: &str) -> Result<Vec<Disk>, XmlError> {
         // libvirt's default device is "disk".
         .filter(|d| attr(d, "device").is_none_or(|v| v == "disk"))
         .filter_map(disk)
+        .collect())
+}
+
+/// The sources of every disk device of a domain, CD-ROMs, floppies, and LUNs
+/// included: a volume that any of them names is in use. Empty drives and
+/// network disks have no local source and are left out.
+pub fn domain_disk_sources(xml: &str) -> Result<Vec<DiskSource>, XmlError> {
+    let domain = parse(xml, "domain")?;
+    let Some(devices) = domain.get_child("devices") else {
+        return Ok(Vec::new());
+    };
+    Ok(devices
+        .children
+        .iter()
+        .filter_map(XMLNode::as_element)
+        .filter(|e| e.name == "disk")
+        .filter_map(disk)
+        .map(|d| d.source)
         .collect())
 }
 
@@ -246,6 +264,35 @@ mod tests {
                     shared: false,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn every_disk_source_counts_for_a_volume_in_use() {
+        // The CD-ROM with an ISO counts; the empty drive and the network disk
+        // have no local source.
+        assert_eq!(
+            domain_disk_sources(DOMAIN).unwrap(),
+            [
+                DiskSource::File("/var/lib/libvirt/images/web.qcow2".into()),
+                DiskSource::Volume {
+                    pool: "default".into(),
+                    volume: "web-data.qcow2".into(),
+                },
+                DiskSource::Block("/dev/vg0/web".into()),
+                DiskSource::File("/var/lib/libvirt/images/debian.iso".into()),
+                DiskSource::File("/srv/plain.img".into()),
+            ]
+        );
+        let floppy = r#"<domain><devices><disk type="file" device="floppy">
+            <source file="/srv/boot.img"/></disk></devices></domain>"#;
+        assert_eq!(
+            domain_disk_sources(floppy).unwrap(),
+            [DiskSource::File("/srv/boot.img".into())]
+        );
+        assert!(
+            domain_disk_sources("<domain/>").unwrap().is_empty(),
+            "no devices"
         );
     }
 

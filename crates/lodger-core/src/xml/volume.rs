@@ -112,6 +112,14 @@ impl VolumeXml {
             .and_then(|t| child_text(t, "path"))
     }
 
+    /// The file that this volume uses as its backing file, for a qcow2
+    /// overlay.
+    pub fn backing_path(&self) -> Option<&str> {
+        self.0
+            .get_child("backingStore")
+            .and_then(|b| child_text(b, "path"))
+    }
+
     /// The disk format, such as `qcow2` or `raw`.
     pub fn format(&self) -> Option<&str> {
         self.0
@@ -181,11 +189,19 @@ mod tests {
     <format type='qcow2'/>
     <permissions><mode>0600</mode></permissions>
   </target>
+  <backingStore>
+    <path>/var/lib/libvirt/images/base.qcow2</path>
+    <format type='qcow2'/>
+  </backingStore>
 </volume>";
         let volume = VolumeXml::parse(xml).unwrap();
         assert_eq!(volume.name(), Some("disk1.qcow2"));
         assert_eq!(volume.path(), Some("/var/lib/libvirt/images/disk1.qcow2"));
         assert_eq!(volume.format(), Some("qcow2"));
+        assert_eq!(
+            volume.backing_path(),
+            Some("/var/lib/libvirt/images/base.qcow2")
+        );
     }
 
     #[test]
@@ -193,6 +209,7 @@ mod tests {
         let volume = VolumeXml::parse("<volume><name>x</name></volume>").unwrap();
         assert_eq!(volume.format(), None);
         assert_eq!(volume.path(), None);
+        assert_eq!(volume.backing_path(), None);
         assert!(VolumeXml::parse("<pool/>").is_err());
     }
 }

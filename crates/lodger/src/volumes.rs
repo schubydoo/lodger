@@ -6,7 +6,7 @@
 //! - `POST /api/pools/{id}/volumes`: a new qcow2 or raw volume, from
 //!   `{"name", "format", "capacity_bytes"}`.
 //! - `DELETE /api/pools/{id}/volumes/{name}`: deletes the volume, unless a VM
-//!   uses it.
+//!   or a qcow2 overlay in the pool uses it.
 //!
 //! Every call that reaches libvirt with a change writes a `volume.*` audit row.
 
@@ -18,7 +18,7 @@ use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use lodger_core::validate::Name;
+use lodger_core::validate::{Name, check_text};
 use lodger_core::xml::volume::{NewVolume, VolumeFormat};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -99,13 +99,13 @@ pub async fn create(
     let Some(virt) = state.host.virt() else {
         return no_libvirt();
     };
-    let existing = match virt.volumes(id).await {
+    let existing = match virt.volume_names(id).await {
         Ok(existing) => existing,
         Err(e) if e.is_not_found() => return error(StatusCode::NOT_FOUND, "no such pool"),
         Err(e) if e.is_invalid_operation() => return error_answer(StatusCode::CONFLICT, &e),
         Err(e) => return error_answer(StatusCode::BAD_GATEWAY, &e),
     };
-    if let Err(e) = volume.check_against(&pool.name, existing.iter().map(|v| v.name.as_str())) {
+    if let Err(e) = volume.check_against(&pool.name, existing.iter().map(String::as_str)) {
         return error(StatusCode::CONFLICT, e.to_string());
     }
     let ip = crate::client_ip::client_ip(peer.ip(), &headers, &state.trusted_proxies);
@@ -139,6 +139,12 @@ pub async fn remove(
     Extension(session): Extension<Session>,
     Path((id, name)): Path<(Uuid, String)>,
 ) -> Response {
+    // The name comes from the URL, and a NUL byte there would make the virt
+    // crate panic. Only NUL is refused: a volume from another tool may have a
+    // name outside Lodger's own rules, and it must stay deletable.
+    if let Err(e) = check_text("Volume name", &name) {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string());
+    }
     let Some(pool) = state.host.inventory().pools.remove(&id) else {
         return error(StatusCode::NOT_FOUND, "no such pool");
     };
