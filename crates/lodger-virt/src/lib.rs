@@ -3,6 +3,7 @@
 mod cache;
 mod conn;
 mod console;
+mod delete;
 mod events;
 mod power;
 mod stats;
@@ -10,6 +11,7 @@ mod supervisor;
 
 pub use cache::Inventory;
 pub use conn::{Error, Virt};
+pub use delete::{Removal, SkipReason, Skipped};
 pub use events::{DomainChange, Event};
 pub use power::Power;
 pub use supervisor::{ConnState, Host};

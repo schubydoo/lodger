@@ -47,6 +47,9 @@ pub enum Error {
     /// start of a running domain.
     #[error("{0}")]
     WrongState(&'static str),
+    /// libvirt returned XML that Lodger cannot read.
+    #[error(transparent)]
+    Xml(#[from] lodger_core::xml::XmlError),
 }
 
 impl Error {
@@ -165,7 +168,7 @@ pub struct Virt {
     job: Arc<Connection>,
     fast: Arc<Semaphore>,
     long: Arc<Semaphore>,
-    hub: broadcast::Sender<Event>,
+    pub(crate) hub: broadcast::Sender<Event>,
 }
 
 impl Virt {
