@@ -28,6 +28,11 @@ describe('the VM list', () => {
 		expect(beta.getByText('(transient)')).toBeInTheDocument();
 	});
 
+	it('links each name to its VM page', () => {
+		show((c) => c.setQueryData(keys.vms, vms));
+		expect(screen.getByRole('link', { name: 'beta' })).toHaveAttribute('href', '/vms/beta');
+	});
+
 	it('links the console of each running VM, and only of running ones', () => {
 		show((c) => c.setQueryData(keys.vms, vms));
 		expect(screen.getByRole('link', { name: 'Console of alpha' })).toHaveAttribute(

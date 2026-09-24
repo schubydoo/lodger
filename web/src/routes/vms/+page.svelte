@@ -39,7 +39,12 @@
 			{#each vms.data as vm (vm.uuid)}
 				<Table.Row>
 					<Table.Cell class="font-medium">
-						{vm.name}
+						<a
+							href={resolve('/vms/[name]', { name: vm.name })}
+							class="rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+						>
+							{vm.name}
+						</a>
 						{#if !vm.persistent}
 							<span class="ml-2 text-xs text-muted-foreground">(transient)</span>
 						{/if}

@@ -34,8 +34,9 @@ Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
 - `crates/lodger-virt`: the libvirt adapter. It is the only crate that imports `virt`.
   `conn.rs` holds 2 connections: a read connection with the event callbacks, and a job
   connection for slow calls. `events/` turns libvirt callbacks into events, and
-  `events/ffi.rs` is the only module with `unsafe` code. `cache.rs` keeps the inventory,
-  `supervisor.rs` reconnects, and `power.rs` starts and stops domains.
+  `stats/` reads the live stats of the running domains. `events/ffi.rs` and
+  `stats/ffi.rs` are the only modules with `unsafe` code. `cache.rs` keeps the
+  inventory, `supervisor.rs` reconnects, and `power.rs` starts and stops domains.
 - `crates/lodger`: the server binary. axum routes are in `server.rs`. Sessions, login,
   and the CSRF check are in `auth.rs` (`require_session`), and the throttle is in
   `throttle.rs`. The Origin rule and the security headers are in `security.rs`. The
@@ -53,17 +54,19 @@ Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
 - A user-facing change adds one `.changeset/<slug>.md` fragment with a one-line body.
   An internal change (CI, tests, refactor, docs for contributors) gets the
   `no-changelog` label instead. Never edit `CHANGELOG.md` by hand: knope generates it.
-- `unsafe` code is allowed only in `crates/lodger-virt/src/events/ffi.rs`. A CI guard
-  searches the crates for the word, comments included. In a comment elsewhere, write
-  "state-changing" or another word.
+- `unsafe` code is allowed only in `crates/lodger-virt/src/events/ffi.rs` and
+  `crates/lodger-virt/src/stats/ffi.rs`. Each block needs a `// SAFETY:` comment. A
+  change to either file needs the AddressSanitizer stress tests in
+  `.github/workflows/nightly.yml`. A CI guard searches the crates for the word, comments
+  included. In a comment elsewhere, write "state-changing" or another word.
 - Only `lodger-virt` imports `virt`. Lodger calls libvirt through the Rust bindings.
   Never add a subprocess call (`virsh`, `qemu-img`, or a shell).
 - libvirt is the source of truth for VMs, pools, networks, and snapshots. SQLite holds
   only accounts, sessions, recovery codes, the audit log, and UI settings.
 - Build XML and YAML with the builders, never by joining strings.
 - A password, token, session cookie, CSRF token, or cloud-init user-data must never
-  reach a log line or the audit log. A failed login for an unknown name stores no name, because
-  the name can be a password typed into the wrong field.
+  reach a log line or the audit log. A failed login for an unknown name stores no
+  name, because the name can be a password typed into the wrong field.
 - Every change to a VM or an account writes an audit row through `audit::log` (server)
   or `audit::record` (CLI). The detail holds only the allowlisted `Detail` fields, and a
   failure reason is a fixed code.

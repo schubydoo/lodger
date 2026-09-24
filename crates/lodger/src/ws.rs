@@ -8,7 +8,12 @@
 //!   inventory loads again, for example after a reconnect.
 //! - `connection`: the libvirt connection state changed, with the same
 //!   fields as `connection` in `GET /api/host`.
+//! - `stats`: the live stats of every running VM, in `vms`, every 5 seconds.
+//!   Only a client that sent `{"subscribe":"stats"}` gets them, until it
+//!   sends `{"unsubscribe":"stats"}` or closes.
 //!
+//! The browser sends only those 2 messages. The server ignores anything
+//! else, and any text over 256 bytes.
 //! Each client has its own task and its own receiver. A slow client
 //! therefore delays only itself. When it falls more than the hub's capacity
 //! behind, it skips the old events and gets `resync`.
@@ -17,16 +22,19 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use lodger_core::model::VmStats;
 use lodger_virt::Event;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::api::Connection;
 use crate::auth::{self, SocketQuery};
 use crate::server::AppState;
+use crate::stats::Snapshot;
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Update {
     Vm {
@@ -43,6 +51,45 @@ pub enum Update {
         #[serde(flatten)]
         connection: Connection,
     },
+    Stats {
+        vms: Vec<VmStats>,
+    },
+}
+
+/// A message from the browser. As an enum, it accepts an object with exactly
+/// one key, so `{"subscribe":"stats","x":1}` fails to parse.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+enum Request {
+    #[serde(rename = "subscribe")]
+    Subscribe(Topic),
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe(Topic),
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Topic {
+    Stats,
+}
+
+/// The browser's request in `text`, or `None` for anything else.
+fn request(text: &str) -> Option<Request> {
+    if text.len() > 256 {
+        return None;
+    }
+    serde_json::from_str(text).ok()
+}
+
+/// The next stats snapshot for a subscribed client. Without a subscription,
+/// it never finishes, so `select!` waits on the other branches.
+async fn next_stats(stats: &mut Option<watch::Receiver<Snapshot>>) -> Option<Vec<VmStats>> {
+    match stats {
+        Some(rx) => {
+            rx.changed().await.ok()?;
+            Some(rx.borrow_and_update().as_ref().clone())
+        }
+        None => std::future::pending().await,
+    }
 }
 
 pub async fn events(
@@ -77,6 +124,7 @@ async fn forward(mut socket: WebSocket, state: AppState, key: [u8; 32]) {
     let mut conn = state.host.watch_state();
     reloads.mark_unchanged();
     conn.mark_unchanged();
+    let mut stats = None;
 
     loop {
         let update = tokio::select! {
@@ -99,9 +147,19 @@ async fn forward(mut socket: WebSocket, state: AppState, key: [u8; 32]) {
                 let _ = socket.send(session_over()).await;
                 return;
             },
+            Some(vms) = next_stats(&mut stats) => Update::Stats { vms },
             incoming = socket.recv() => match incoming {
-                // The browser sends nothing. Ignore anything but a close.
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(Message::Text(text))) => {
+                    match request(&text) {
+                        Some(Request::Subscribe(Topic::Stats)) if stats.is_none() => {
+                            stats = Some(state.stats.subscribe());
+                        }
+                        Some(Request::Unsubscribe(Topic::Stats)) => stats = None,
+                        _ => {}
+                    }
+                    continue;
+                }
                 Some(Ok(_)) => continue,
             },
         };
@@ -133,8 +191,30 @@ mod tests {
     use tokio::sync::broadcast::error::RecvError;
     use uuid::Uuid;
 
-    use super::{Update, update_for};
+    use super::{Request, Topic, Update, request, update_for};
     use crate::api::Connection;
+
+    #[test]
+    fn only_the_two_requests_parse() {
+        assert_eq!(
+            request(r#"{"subscribe":"stats"}"#),
+            Some(Request::Subscribe(Topic::Stats))
+        );
+        assert_eq!(
+            request(r#"{"unsubscribe":"stats"}"#),
+            Some(Request::Unsubscribe(Topic::Stats))
+        );
+        for other in [
+            "hello",
+            r#"{"subscribe":"cpu"}"#,
+            r#"{"subscribe":"stats","x":1}"#,
+            r#"{"type":"stats"}"#,
+        ] {
+            assert_eq!(request(other), None, "{other}");
+        }
+        let long = format!(r#"{{"subscribe":"stats"}}{}"#, " ".repeat(300));
+        assert_eq!(request(&long), None);
+    }
 
     #[test]
     fn each_event_maps_to_its_message() {

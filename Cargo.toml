@@ -42,8 +42,8 @@ opt-level = 3
 # Identifiers in doc comments must have backticks.
 doc_markdown = "warn"
 # Each `unsafe` block must have a `// SAFETY:` comment. Lodger allows `unsafe`
-# only in crates/lodger-virt/src/events/ffi.rs (a CI guard enforces the place);
-# this lint enforces the justification.
+# only in crates/lodger-virt/src/events/ffi.rs and stats/ffi.rs (a CI guard
+# enforces the places); this lint enforces the justification.
 undocumented_unsafe_blocks = "warn"
 
 [workspace.lints.rustdoc]

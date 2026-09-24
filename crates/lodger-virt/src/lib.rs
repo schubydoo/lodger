@@ -5,6 +5,7 @@ mod conn;
 mod console;
 mod events;
 mod power;
+mod stats;
 mod supervisor;
 
 pub use cache::Inventory;

@@ -12,6 +12,7 @@ mod host;
 mod network;
 mod pool;
 mod snapshot;
+mod stats;
 mod vm;
 mod volume;
 
@@ -19,5 +20,6 @@ pub use host::HostInfo;
 pub use network::Network;
 pub use pool::{Pool, PoolState};
 pub use snapshot::Snapshot;
+pub use stats::{Counters, StatValue, VmStats};
 pub use vm::{Vm, VmState};
 pub use volume::{Volume, VolumeKind};
