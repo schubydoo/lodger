@@ -299,6 +299,66 @@ pub(crate) fn error_answer(code: StatusCode, e: &lodger_virt::Error) -> Response
     explained(code, e.to_string(), e.explanation())
 }
 
+/// The answer that says that Lodger has no libvirt connection now.
+pub(crate) fn no_libvirt() -> Response {
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Lodger is not connected to libvirt",
+    )
+}
+
+/// The answer for a body that is not the expected JSON.
+pub(crate) fn bad_json(e: &serde_json::Error) -> Response {
+    error(StatusCode::BAD_REQUEST, format!("bad JSON body: {e}"))
+}
+
+/// What a pool or network call answers, and audits, when libvirt has no
+/// such object.
+pub(crate) struct NotFound {
+    /// The fixed audit reason, such as `no_such_pool`.
+    pub reason: &'static str,
+    /// The answer text, such as `no such pool`.
+    pub message: &'static str,
+}
+
+/// Runs one libvirt call on a pool or a network and writes its audit row,
+/// with a fixed reason code on failure. The error is the answer to send.
+pub(crate) async fn audited(
+    state: &AppState,
+    not_found: NotFound,
+    row: impl Fn(Entry) -> Entry,
+    event: &'static str,
+    action: Option<&'static str>,
+    call: impl Future<Output = Result<(), lodger_virt::Error>>,
+) -> Result<(), Box<Response>> {
+    let with_action = |mut entry: Entry| {
+        entry.detail.action = action;
+        row(entry)
+    };
+    match call.await {
+        Ok(()) => {
+            audit::log(&state.db, with_action(Entry::ok(event))).await;
+            Ok(())
+        }
+        Err(e) => {
+            let (reason, code) = if e.is_not_found() {
+                (not_found.reason, StatusCode::NOT_FOUND)
+            } else if e.is_invalid_operation() {
+                ("wrong_state", StatusCode::CONFLICT)
+            } else {
+                eprintln!("lodger: {event}: {e}");
+                ("libvirt_error", StatusCode::BAD_GATEWAY)
+            };
+            audit::log(&state.db, with_action(Entry::failed(event, reason))).await;
+            Err(Box::new(if reason == not_found.reason {
+                error(code, not_found.message)
+            } else {
+                error_answer(code, &e)
+            }))
+        }
+    }
+}
+
 /// An error answer. A known libvirt error also carries its `cause`, its
 /// `fix`, and the `commands` of the fix (PRD R10). The `error` text stays
 /// as libvirt wrote it.

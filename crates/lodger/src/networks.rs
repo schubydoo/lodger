@@ -28,10 +28,16 @@ use lodger_core::xml::network::{NetworkXml, NewNetwork};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::actions::{error, error_answer};
+use crate::actions::{NotFound, audited, bad_json, error, error_answer, no_libvirt};
 use crate::audit::{self, Entry};
 use crate::db::Session;
 use crate::server::AppState;
+
+/// The answer and the audit reason when libvirt has no such network.
+const NOT_FOUND: NotFound = NotFound {
+    reason: "no_such_network",
+    message: "no such network",
+};
 
 /// A network with the facts that its XML and the VMs add.
 #[derive(Debug, Serialize)]
@@ -86,17 +92,6 @@ pub struct Change {
 pub struct Removal {
     /// The network's name, typed by the user.
     pub confirm: Option<String>,
-}
-
-fn no_libvirt() -> Response {
-    error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Lodger is not connected to libvirt",
-    )
-}
-
-fn bad_json(e: &serde_json::Error) -> Response {
-    error(StatusCode::BAD_REQUEST, format!("bad JSON body: {e}"))
 }
 
 /// `GET /api/networks`.
@@ -272,14 +267,16 @@ pub async fn change(
             "network.stopped"
         };
         let call = virt.set_network_active(id, active);
-        if let Err(response) = audited(&state, row, event, None, call).await {
+        if let Err(response) = audited(&state, NOT_FOUND, row, event, None, call).await {
             return *response;
         }
     }
     if let Some(on) = change.autostart {
         let action = if on { "autostart-on" } else { "autostart-off" };
         let call = virt.set_network_autostart(id, on);
-        if let Err(response) = audited(&state, row, "network.edited", Some(action), call).await {
+        if let Err(response) =
+            audited(&state, NOT_FOUND, row, "network.edited", Some(action), call).await
+        {
             return *response;
         }
     }
@@ -324,6 +321,7 @@ pub async fn remove(
     };
     match audited(
         &state,
+        NOT_FOUND,
         row,
         "network.deleted",
         None,
@@ -333,42 +331,5 @@ pub async fn remove(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => *response,
-    }
-}
-
-/// Runs one libvirt call and writes its audit row, with a fixed reason code
-/// on failure. The error is the answer to send.
-async fn audited(
-    state: &AppState,
-    row: impl Fn(Entry) -> Entry,
-    event: &'static str,
-    action: Option<&'static str>,
-    call: impl Future<Output = Result<(), lodger_virt::Error>>,
-) -> Result<(), Box<Response>> {
-    let with_action = |mut entry: Entry| {
-        entry.detail.action = action;
-        row(entry)
-    };
-    match call.await {
-        Ok(()) => {
-            audit::log(&state.db, with_action(Entry::ok(event))).await;
-            Ok(())
-        }
-        Err(e) => {
-            let (reason, code) = if e.is_not_found() {
-                ("no_such_network", StatusCode::NOT_FOUND)
-            } else if e.is_invalid_operation() {
-                ("wrong_state", StatusCode::CONFLICT)
-            } else {
-                eprintln!("lodger: {event}: {e}");
-                ("libvirt_error", StatusCode::BAD_GATEWAY)
-            };
-            audit::log(&state.db, with_action(Entry::failed(event, reason))).await;
-            Err(Box::new(if reason == "no_such_network" {
-                error(code, "no such network")
-            } else {
-                error_answer(code, &e)
-            }))
-        }
     }
 }

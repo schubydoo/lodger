@@ -17,7 +17,7 @@ describe('invalidationsFor', () => {
 	});
 
 	it('refetches the host after a pool, network, or connection change', () => {
-		expect(invalidationsFor({ type: 'pool', id })).toEqual([['host']]);
+		expect(invalidationsFor({ type: 'pool', id })).toEqual([['pools'], ['host']]);
 		expect(invalidationsFor({ type: 'network', id })).toEqual([['networks'], ['host']]);
 		expect(invalidationsFor({ type: 'connection', state: 'connected' })).toEqual([['host']]);
 	});

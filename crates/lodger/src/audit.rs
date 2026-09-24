@@ -117,6 +117,13 @@ impl Entry {
         self
     }
 
+    /// The storage pool that the change touched.
+    pub fn target_pool(mut self, name: impl Into<String>) -> Self {
+        self.target_kind = Some("pool");
+        self.target = Some(name.into());
+        self
+    }
+
     /// The virtual network that the change touched.
     pub fn target_network(mut self, name: impl Into<String>) -> Self {
         self.target_kind = Some("network");

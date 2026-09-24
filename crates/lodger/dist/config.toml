@@ -1,0 +1,17 @@
+# Lodger configuration. `lodger serve` reads this file at start.
+# After a change, run: sudo systemctl restart lodger
+# `lodger install` writes this file only if it does not exist.
+
+# The address and port to listen on. Keep a loopback address, and put a
+# reverse proxy with TLS in front of Lodger for remote access.
+listen = "127.0.0.1:8460"
+
+# The libvirt connection.
+uri = "qemu:///system"
+
+# The URL that browsers use to open Lodger. Browsers without
+# Sec-Fetch-Site can log in only when this is set.
+# public_url = "https://lodger.lan"
+
+# The proxies whose X-Forwarded-For header Lodger trusts.
+# trusted_proxies = ["127.0.0.1/32"]

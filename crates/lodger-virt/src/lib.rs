@@ -7,6 +7,7 @@ mod delete;
 mod errors;
 mod events;
 mod network;
+mod pool;
 mod power;
 mod stats;
 mod supervisor;
