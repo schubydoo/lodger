@@ -32,16 +32,19 @@ fn effective_uid(status: &str) -> Option<u32> {
 }
 
 /// Fails unless the process runs as root. An unreadable status also fails.
-fn require_root(status: std::io::Result<String>) -> Result<(), String> {
+/// `command` names the subcommand in the message.
+pub fn require_root(status: std::io::Result<String>, command: &str) -> Result<(), String> {
     match status.ok().as_deref().and_then(effective_uid) {
         Some(0) => Ok(()),
-        _ => Err("lodger admin must run as root. Use sudo lodger admin ...".to_owned()),
+        _ => Err(format!(
+            "lodger {command} must run as root. Use sudo lodger {command} ..."
+        )),
     }
 }
 
 /// Runs an admin command and returns the line to print.
 pub fn run(action: AdminAction, overrides: Overrides) -> Result<String, String> {
-    require_root(std::fs::read_to_string("/proc/self/status"))?;
+    require_root(std::fs::read_to_string("/proc/self/status"), "admin")?;
     let config = Config::load(overrides, std::env::var("STATE_DIRECTORY").ok().as_deref())?;
     let path = config.state_dir.join(db::FILE);
     if !path.exists() {
@@ -270,10 +273,13 @@ mod tests {
 
     #[test]
     fn only_root_passes() {
-        assert!(require_root(Ok("Uid:\t0\t0\t0\t0\n".into())).is_ok());
-        let e = require_root(Ok("Uid:\t1000\t1000\t1000\t1000\n".into())).unwrap_err();
-        assert!(e.contains("must run as root"), "{e}");
-        assert!(require_root(Err(std::io::ErrorKind::NotFound.into())).is_err());
+        assert!(require_root(Ok("Uid:\t0\t0\t0\t0\n".into()), "admin").is_ok());
+        let e = require_root(Ok("Uid:\t1000\t1000\t1000\t1000\n".into()), "install").unwrap_err();
+        assert_eq!(
+            e,
+            "lodger install must run as root. Use sudo lodger install ..."
+        );
+        assert!(require_root(Err(std::io::ErrorKind::NotFound.into()), "admin").is_err());
     }
 
     #[test]

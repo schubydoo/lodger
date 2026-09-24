@@ -50,7 +50,9 @@ tests pass — flag it Important:
 5. **Editors keep what they do not own.** An XML edit must leave every element it does not
    change untouched. Dropping unknown elements corrupts VMs that other tools manage.
 6. **No subprocess calls.** No `virsh`, `virt-install`, `virt-clone`, `virt-xml`, or shell
-   out of any kind. Lodger is Rust-first by design.
+   out of any kind. Lodger is Rust-first by design. The one exception is
+   `crates/lodger/src/install.rs`, which runs `systemd-sysusers`, `userdel`, and `systemctl`
+   with fixed argument lists and no shell. A subprocess anywhere else is Important.
 7. **Every endpoint is guarded.** Everything except setup, login, health, and static files
    needs a valid session. Every state-changing request checks CSRF and Origin, and every
    WebSocket upgrade checks Origin and the session.

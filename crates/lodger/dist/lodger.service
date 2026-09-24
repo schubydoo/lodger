@@ -1,0 +1,40 @@
+# Written by `lodger install`. A reinstall replaces this file, so put local
+# changes in a drop-in: sudo systemctl edit lodger
+[Unit]
+Description=Lodger VM management
+After=network-online.target libvirtd.socket virtqemud.socket virtproxyd.socket
+Wants=network-online.target
+
+[Service]
+User=lodger
+ExecStart=/usr/local/bin/lodger serve --config /etc/lodger/config.toml
+StateDirectory=lodger
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

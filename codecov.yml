@@ -145,6 +145,8 @@ component_management:
         - crates/lodger/src/console.rs
         - crates/lodger/src/db/mod.rs
         - crates/lodger/src/db/tests.rs
+        - crates/lodger/src/doctor.rs
+        - crates/lodger/src/install.rs
         - crates/lodger/src/passwords.rs
         - crates/lodger/src/pools.rs
         - crates/lodger/src/security.rs
