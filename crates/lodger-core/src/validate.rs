@@ -86,6 +86,14 @@ pub enum InputError {
         "there is no bridge {name:?} on this host. A host bridge must exist first: create it on the host, for example with NetworkManager or systemd-networkd, then pick it here"
     )]
     NoSuchBridge { name: String },
+    #[error("{field} must be between {min} and {max} bytes")]
+    SizeOutOfRange {
+        field: &'static str,
+        min: u64,
+        max: u64,
+    },
+    #[error("pool {pool:?} has a volume {name:?} already")]
+    VolumeNameInUse { pool: String, name: String },
 }
 
 /// The longest Linux interface name (`IFNAMSIZ` minus the NUL byte).

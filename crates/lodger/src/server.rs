@@ -19,7 +19,7 @@ use crate::setup::{self, Setup, SetupToken};
 use crate::stats::Stats;
 use crate::throttle::Throttle;
 use crate::tickets::Tickets;
-use crate::{accounts, actions, api, auth, console, networks, pools, security, ws};
+use crate::{accounts, actions, api, auth, console, networks, pools, security, volumes, ws};
 
 /// What every handler can reach.
 #[derive(Debug, Clone)]
@@ -93,6 +93,11 @@ pub fn router(state: AppState) -> Router {
                 .patch(pools::change)
                 .delete(pools::remove),
         )
+        .route(
+            "/api/pools/{id}/volumes",
+            get(volumes::list).post(volumes::create),
+        )
+        .route("/api/pools/{id}/volumes/{name}", delete(volumes::remove))
         .route("/api/networks", get(networks::list).post(networks::create))
         .route(
             "/api/networks/{id}",
@@ -1578,6 +1583,151 @@ mod tests {
                     "ok",
                     r#"{"action":"delete-files"}"#
                 ),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn volumes_are_created_listed_kept_while_used_deleted_and_audited() {
+        let (addr, token, state) = serve_setup().await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let pool_name = "lodger-spike-vol-api";
+        let path = "/srv/lodger-spike-vol-api";
+        let create = serde_json::json!({ "name": pool_name, "kind": "dir", "path": path });
+        let (status, answer) = call(&addr, &tab, "POST", "/api/pools", Some(create)).await;
+        assert_eq!(status, 201, "{answer}");
+        let id = answer["uuid"].as_str().unwrap().to_owned();
+        wait_for_pool(&addr, &tab, &id, |s, _| s == 200).await;
+        let url = format!("/api/pools/{id}/volumes");
+
+        // A 20 GiB qcow2 volume appears with that size and format.
+        let disk = serde_json::json!({
+            "name": "disk1.qcow2", "format": "qcow2", "capacity_bytes": 21_474_836_480_u64,
+        });
+        let (status, answer) = call(&addr, &tab, "POST", &url, Some(disk.clone())).await;
+        assert_eq!(status, 201, "{answer}");
+        assert_eq!(answer["name"], "disk1.qcow2");
+        let (status, list) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(status, 200, "{list}");
+        assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+        assert_eq!(list[0]["name"], "disk1.qcow2");
+        assert_eq!(list[0]["capacity_bytes"], 21_474_836_480_u64);
+        assert_eq!(list[0]["format"], "qcow2");
+        assert_eq!(list[0]["path"], format!("{path}/disk1.qcow2"));
+        assert_eq!(list[0]["used_by"], serde_json::json!([]));
+
+        // Rejected before any change.
+        let rejects = [
+            (disk.clone(), 409, "has a volume \"disk1.qcow2\" already"),
+            (
+                serde_json::json!({ "name": "bad name", "format": "raw", "capacity_bytes": 1_048_576 }),
+                422,
+                "Volume name",
+            ),
+            (
+                serde_json::json!({ "name": "d.img", "format": "raw", "capacity_bytes": 0 }),
+                422,
+                "size must be between",
+            ),
+            (
+                serde_json::json!({ "name": "d.img", "format": "vmdk", "capacity_bytes": 1_048_576 }),
+                400,
+                "bad JSON",
+            ),
+        ];
+        for (body, want, text) in rejects {
+            let (status, answer) = call(&addr, &tab, "POST", &url, Some(body.clone())).await;
+            assert_eq!(status, want, "{body}: {answer}");
+            let message = answer["error"].as_str().unwrap_or_default();
+            assert!(message.contains(text), "{body}: {message}");
+        }
+        let (_, list) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(list.as_array().unwrap().len(), 1, "nothing changed: {list}");
+        let unknown = format!("/api/pools/{}/volumes", Uuid::nil());
+        assert_eq!(call(&addr, &tab, "GET", &unknown, None).await.0, 404);
+        // A NUL byte in the URL's name is refused before libvirt sees it.
+        let (status, answer) = call(&addr, &tab, "DELETE", &format!("{url}/a%00b"), None).await;
+        assert_eq!(status, 422, "{answer}");
+        assert!(
+            answer["error"].as_str().unwrap().contains("NUL"),
+            "{answer}"
+        );
+
+        // A volume that a VM uses stays, and the answer names the VM.
+        let outside = Virt::open(TEST_URI).await.unwrap();
+        outside
+            .job(move |c| {
+                let xml = format!(
+                    "<domain type='test'><name>lodger-spike-vol-user</name><memory>1024</memory>\
+                     <os><type>hvm</type></os><devices><disk type='file' device='disk'>\
+                     <source file='{path}/disk1.qcow2'/><target dev='vda'/></disk></devices></domain>"
+                );
+                c.define_domain_xml(&xml).map(drop)
+            })
+            .await
+            .unwrap();
+        let (_, list) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(
+            list[0]["used_by"],
+            serde_json::json!(["lodger-spike-vol-user"])
+        );
+        let one = format!("{url}/disk1.qcow2");
+        let (status, answer) = call(&addr, &tab, "DELETE", &one, None).await;
+        assert_eq!(status, 409, "{answer}");
+        assert_eq!(answer["error"], "in use by lodger-spike-vol-user");
+        let (_, list) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(list.as_array().unwrap().len(), 1, "the volume stays");
+
+        outside
+            .job(|c| c.lookup_domain_by_name("lodger-spike-vol-user")?.undefine())
+            .await
+            .unwrap();
+        assert_eq!(call(&addr, &tab, "DELETE", &one, None).await.0, 204);
+        let (status, answer) = call(&addr, &tab, "DELETE", &one, None).await;
+        assert_eq!(status, 404, "{answer}");
+        assert_eq!(answer["error"], "no such pool or volume");
+
+        // A stopped pool lists no volumes.
+        let stop = serde_json::json!({ "active": false });
+        let pool_url = format!("/api/pools/{id}");
+        assert_eq!(
+            call(&addr, &tab, "PATCH", &pool_url, Some(stop)).await.0,
+            204
+        );
+        let (status, answer) = call(&addr, &tab, "GET", &url, None).await;
+        assert_eq!(status, 409, "{answer}");
+        assert!(
+            answer["error"].as_str().unwrap().contains("not running"),
+            "{answer}"
+        );
+        let no_session = raw(&addr, "GET", &url, &[SAME_ORIGIN.into()], "").await;
+        assert_eq!(no_session.0, 401);
+        let confirm = serde_json::json!({ "confirm": pool_name });
+        assert_eq!(
+            call(&addr, &tab, "DELETE", &pool_url, Some(confirm))
+                .await
+                .0,
+            204
+        );
+
+        let lines = audit_lines(&state).await;
+        let rows: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.starts_with("volume."))
+            .map(String::as_str)
+            .collect();
+        let target = format!("{pool_name}/disk1.qcow2");
+        let row = |event: &str, result: &str, detail: &str| {
+            format!("{event} admin 127.0.0.1 {target} {result} {detail}")
+        };
+        assert_eq!(
+            rows,
+            [
+                row("volume.created", "ok", "-"),
+                row("volume.deleted", "failed", r#"{"reason":"in_use"}"#),
+                row("volume.deleted", "ok", "-"),
+                row("volume.deleted", "failed", r#"{"reason":"no_such_volume"}"#),
             ]
         );
     }
