@@ -56,6 +56,17 @@ pub enum Command {
         #[arg(long, global = true)]
         state_dir: Option<PathBuf>,
     },
+    /// Check the host for what Lodger needs, and print how to fix each problem.
+    ///
+    /// Checks the libvirt socket, the lodger user in the libvirt group, the
+    /// `AppArmor` rule for NIC hot-plug, the `SELinux` `virt_use_nfs` boolean, the
+    /// libvirt connection, and snapshot revert. Changes nothing.
+    Doctor {
+        /// Configuration file, for the libvirt URI [default:
+        /// /etc/lodger/config.toml, if it exists]
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Print the Lodger version and the libvirt client library version.
     Version,
 }
@@ -181,6 +192,20 @@ mod tests {
         assert!(Cli::try_parse_from(["lodger", "admin"]).is_err());
         assert!(Cli::try_parse_from(["lodger", "admin", "create"]).is_err());
         assert!(Cli::try_parse_from(["lodger", "admin", "reset-password"]).is_err());
+    }
+
+    #[test]
+    fn doctor_takes_an_optional_config() {
+        let cli = Cli::try_parse_from(["lodger", "doctor"]).unwrap();
+        assert!(matches!(cli.command, Command::Doctor { config: None }));
+        let cli = Cli::try_parse_from(["lodger", "doctor", "--config", "/c.toml"]).unwrap();
+        let Command::Doctor {
+            config: Some(config),
+        } = cli.command
+        else {
+            panic!("expected doctor with --config");
+        };
+        assert_eq!(config.to_str(), Some("/c.toml"));
     }
 
     #[test]

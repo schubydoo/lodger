@@ -12,6 +12,7 @@ mod client_ip;
 mod config;
 mod console;
 mod db;
+mod doctor;
 mod passwords;
 mod security;
 mod server;
@@ -27,6 +28,11 @@ fn main() {
     let cli = cli::Cli::parse();
     let result = match cli.command {
         cli::Command::Version => cli::version_line().map(|line| println!("{line}")),
+        cli::Command::Doctor { config } => doctor::run(config::Overrides {
+            config,
+            ..Default::default()
+        })
+        .map(|line| println!("{line}")),
         cli::Command::Admin {
             action,
             config,
