@@ -83,14 +83,21 @@ impl Virt {
         .await?
     }
 
-    /// Stops network `id` if it runs, and undefines it.
+    /// Stops network `id` if it runs, and undefines it. A transient network
+    /// has no definition: libvirt removes it at the stop, so it is not
+    /// undefined.
     pub async fn delete_network(&self, id: Uuid) -> Result<(), Error> {
         self.job(move |c| {
             let network = c.lookup_network_by_uuid(id)?;
+            // Read before the stop: after it, a transient network is gone.
+            let persistent = network.is_persistent()?;
             if network.is_active()? {
                 network.destroy()?;
             }
-            network.undefine()
+            if persistent {
+                network.undefine()?;
+            }
+            Ok(())
         })
         .await
     }
@@ -366,6 +373,18 @@ mod tests {
         let xml = virt.network_xml(kept).await.unwrap();
         assert!(xml.contains("10.206.0.1"), "{xml}");
         virt.delete_network(kept).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_transient_network_is_deleted_without_an_error() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let xml = nat("net-transient", "10.208.0.0/24");
+        let id = virt
+            .job(move |c| c.create_network_xml(&xml)?.uuid())
+            .await
+            .unwrap();
+        virt.delete_network(id).await.unwrap();
+        assert!(!exists(&virt, "net-transient").await);
     }
 
     #[test]

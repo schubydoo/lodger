@@ -29,7 +29,7 @@ function show(
 	const client = testClient();
 	client.setQueryData(keys.session, { username: 'admin', csrf_token: 'csrf1' });
 	render(QueryHarness, { props: { client, component: NetworkManage, props: { network: n } } });
-	return { fetcher };
+	return { fetcher, client };
 }
 
 const button = (name: string) => screen.getByRole('button', { name });
@@ -67,7 +67,8 @@ describe('a network page', () => {
 	});
 
 	it('deletes only after the exact name is typed', async () => {
-		const { fetcher } = show(network);
+		const { fetcher, client } = show(network);
+		const refresh = vi.spyOn(client, 'invalidateQueries');
 		await fireEvent.click(button('Delete lab'));
 		const remove = button('Delete');
 		const typeName = (value: string) =>
@@ -78,6 +79,7 @@ describe('a network page', () => {
 		await typeName('lab');
 		await fireEvent.click(remove);
 		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/networks'));
+		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.networks });
 		expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE');
 		expect(body(fetcher)).toEqual({ confirm: 'lab' });
 	});

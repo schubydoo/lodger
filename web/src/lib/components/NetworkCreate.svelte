@@ -51,6 +51,8 @@
 			await createNetwork(network, {
 				csrf: client.getQueryData<Session | null>(keys.session)?.csrf_token
 			});
+			// The new page finds the network in the list: refresh it first.
+			await client.invalidateQueries({ queryKey: keys.networks });
 			await goto(resolve('/networks/[name]', { name: network.name }));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);

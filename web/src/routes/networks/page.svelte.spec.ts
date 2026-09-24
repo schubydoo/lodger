@@ -56,4 +56,17 @@ describe('the networks page', () => {
 		expect(screen.getByText('libvirt has no virtual networks on this host.')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Create network' })).toBeInTheDocument();
 	});
+
+	it('shows the loading and the failed list', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }))
+		);
+		const client = testClient();
+		client.setQueryData(keys.hostBridges, []);
+		render(QueryHarness, { props: { client, component: Page, props: {} } });
+		expect(screen.getByText('Loading the networks…')).toBeInTheDocument();
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the networks');
+		vi.unstubAllGlobals();
+	});
 });

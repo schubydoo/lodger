@@ -9,16 +9,16 @@ const nav = vi.hoisted(() => ({ goto: vi.fn(async () => {}) }));
 vi.mock('$app/navigation', () => ({ goto: nav.goto }));
 
 function show(
-	bridges: string[] = ['br0', 'virbr0'],
+	bridges: string[] | null = ['br0', 'virbr0'],
 	respond: () => Response = () => new Response(JSON.stringify({ uuid: 'u1' }), { status: 201 })
 ) {
 	const fetcher = vi.fn<typeof fetch>(async () => respond());
 	vi.stubGlobal('fetch', fetcher);
 	const client = testClient();
 	client.setQueryData(keys.session, { username: 'admin', csrf_token: 'csrf1' });
-	client.setQueryData(keys.hostBridges, bridges);
+	if (bridges !== null) client.setQueryData(keys.hostBridges, bridges);
 	render(QueryHarness, { props: { client, component: NetworkCreate, props: {} } });
-	return { fetcher };
+	return { fetcher, client };
 }
 
 const type = (label: string, value: string) =>
@@ -105,5 +105,22 @@ describe('the New network form', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Create network' }));
 		expect(await screen.findByRole('alert')).toHaveTextContent('which network "default" uses');
 		expect(nav.goto).not.toHaveBeenCalled();
+	});
+
+	it('refreshes the network list before it opens the new page', async () => {
+		const { client } = show();
+		const refresh = vi.spyOn(client, 'invalidateQueries');
+		await type('Name', 'lab');
+		await type('Subnet', '192.168.150.0/24');
+		await fireEvent.click(screen.getByRole('button', { name: 'Create network' }));
+		await waitFor(() => expect(nav.goto).toHaveBeenCalled());
+		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.networks });
+		expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(nav.goto.mock.invocationCallOrder[0]);
+	});
+
+	it('shows a failed list of host bridges', async () => {
+		show(null, () => new Response(null, { status: 500, statusText: 'Internal Server Error' }));
+		await fireEvent.click(screen.getByLabelText('Host bridge'));
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the host bridges');
 	});
 });

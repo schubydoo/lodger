@@ -78,4 +78,25 @@ describe('a network page', () => {
 			'libvirt has no virtual network called gone.'
 		);
 	});
+
+	it('shows the loading and a failed detail', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(null, { status: 502, statusText: 'Bad Gateway' }))
+		);
+		show((c) => c.setQueryData(keys.networks, [listed]));
+		expect(screen.getByText('Loading the network…')).toBeInTheDocument();
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the network');
+		vi.unstubAllGlobals();
+	});
+
+	it('shows a failed list', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }))
+		);
+		show(() => {});
+		expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the networks');
+		vi.unstubAllGlobals();
+	});
 });

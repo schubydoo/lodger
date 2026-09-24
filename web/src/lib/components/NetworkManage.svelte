@@ -55,6 +55,7 @@
 		busy = 'delete';
 		try {
 			await deleteNetwork(network.uuid, { confirm: typed, csrf: csrf() });
+			await client.invalidateQueries({ queryKey: keys.networks });
 			await goto(resolve('/networks'));
 		} catch (e) {
 			failed(e);
