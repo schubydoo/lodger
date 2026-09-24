@@ -282,6 +282,11 @@ fn check(host: &Host, self_signed: Option<&str>, run: &mut impl Run) -> Result<S
             "{name:?} is not an IP address or a host name, so it cannot go into a certificate."
         ));
     }
+    if self_signed.is_some()
+        && let Some(problem) = foreign_pair(host)
+    {
+        problems.push(problem);
+    }
     if !host.path(SYSTEMD_RUNNING).is_dir() {
         problems.push(
             "systemd does not run on this host. Lodger installs only as a systemd service."
@@ -356,6 +361,24 @@ fn check(host: &Host, self_signed: Option<&str>, run: &mut impl Run) -> Result<S
     }
 }
 
+/// Why `--self-signed` must not write to `/etc/lodger/tls/`, if a pair that
+/// Lodger did not make is there. The template suggests the same paths for an
+/// operator's own certificate, and its private key cannot be made again.
+fn foreign_pair(host: &Host) -> Option<String> {
+    let (cert, key) = (host.path(TLS_CERT), host.path(TLS_KEY));
+    let move_away = "To use a self-signed pair instead, move it away first.";
+    match std::fs::read(&cert) {
+        Ok(pem) if crate::tls::made_by_lodger(&pem) => None,
+        Ok(_) => Some(format!(
+            "/{TLS_CERT} holds a certificate that Lodger did not make. {move_away}"
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => key
+            .exists()
+            .then(|| format!("/{TLS_KEY} exists without a certificate. {move_away}")),
+        Err(e) => Some(format!("cannot read /{TLS_CERT}: {e}")),
+    }
+}
+
 /// True if a `name:...` line exists in the text of `/etc/passwd` or
 /// `/etc/group`.
 fn has_entry(text: &str, name: &str) -> bool {
@@ -400,7 +423,7 @@ fn write(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
     write_as(path, bytes, mode, None)
 }
 
-/// Like [`write`], and with an owner `(uid, gid)`, set before the file gets
+/// Like [`write()`], and with an owner `(uid, gid)`, set before the file gets
 /// its name, so no other user can open it in between.
 fn write_as(path: &Path, bytes: &[u8], mode: u32, owner: Option<(u32, u32)>) -> Result<(), String> {
     let dir = path.parent().expect("every target has a parent");
@@ -1261,6 +1284,62 @@ mod tests {
         );
         assert_eq!(tree(&host), before, "nothing changed");
         assert!(run.calls.is_empty());
+    }
+
+    #[test]
+    fn self_signed_never_overwrites_a_foreign_pair_at_its_own_paths() {
+        // The template suggests /etc/lodger/tls/ for an operator's own pair.
+        let (dir, host, exe, _) = ready_host_with_user();
+        put(
+            &host,
+            CONFIG_FILE,
+            "tls_cert = \"/etc/lodger/tls/cert.pem\"\ntls_key = \"/etc/lodger/tls/key.pem\"\n",
+        );
+        let other = crate::tls::test_pair::write(dir.path(), "ca-signed", (2031, 1, 1));
+        put(
+            &host,
+            TLS_CERT,
+            &std::fs::read_to_string(&other.cert).unwrap(),
+        );
+        put(
+            &host,
+            TLS_KEY,
+            &std::fs::read_to_string(&other.key).unwrap(),
+        );
+        let before = tree(&host);
+        let key_before = read(&host, TLS_KEY);
+        let mut run = Recorder::default();
+        let err = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("/etc/lodger/tls/cert.pem holds a certificate that Lodger did not make"),
+            "{err}"
+        );
+        assert_eq!(tree(&host), before, "nothing changed");
+        assert_eq!(read(&host, TLS_KEY), key_before);
+        assert!(run.calls.is_empty());
+
+        // A key alone is refused too: it may belong to a certificate elsewhere.
+        std::fs::remove_file(host.path(TLS_CERT)).unwrap();
+        let err = install(
+            &host,
+            &exe,
+            Some("192.168.1.10"),
+            SystemTime::now(),
+            &mut run,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("/etc/lodger/tls/key.pem exists without a certificate"),
+            "{err}"
+        );
+        assert_eq!(read(&host, TLS_KEY), key_before);
     }
 
     #[test]

@@ -88,6 +88,24 @@ pub fn not_after(path: &Path) -> Result<DateTime, String> {
 /// How long a certificate from `lodger install --self-signed` lasts.
 pub const SELF_SIGNED_DAYS: u64 = 730;
 
+/// The organization in the subject of every self-signed certificate. A later
+/// `--self-signed` run replaces only a certificate with this mark, so it never
+/// destroys an operator's own pair at the same paths.
+const SELF_SIGNED_MARK: &str = "Lodger self-signed";
+
+/// True if the PEM text is a certificate that `self_signed` made.
+pub fn made_by_lodger(pem: &[u8]) -> bool {
+    let Ok(cert) = Certificate::from_pem(pem) else {
+        return false;
+    };
+    let mark = format!("O={SELF_SIGNED_MARK}");
+    cert.tbs_certificate()
+        .subject()
+        .to_string()
+        .split(',')
+        .any(|part| part == mark)
+}
+
 /// A new self-signed pair, as PEM text.
 pub struct SelfSigned {
     pub cert_pem: String,
@@ -107,6 +125,9 @@ pub fn self_signed(name: &str, now: std::time::SystemTime) -> Result<SelfSigned,
     let key = KeyPair::generate().map_err(fail)?;
     let mut params = rcgen::CertificateParams::new(vec![name.to_owned()]).map_err(fail)?;
     params.distinguished_name.push(DnType::CommonName, name);
+    params
+        .distinguished_name
+        .push(DnType::OrganizationName, SELF_SIGNED_MARK);
     params.is_ca = IsCa::ExplicitNoCa;
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
     params.not_before = (now - Duration::from_secs(60 * 60)).into();
@@ -250,7 +271,7 @@ mod tests {
     use rustls_pki_types::{CertificateDer, ServerName};
     use tokio_rustls::rustls::{self, ClientConnection, ServerConnection};
 
-    use super::{not_after, self_signed, server_config, test_pair, valid_name};
+    use super::{made_by_lodger, not_after, self_signed, server_config, test_pair, valid_name};
     use crate::config::TlsFiles;
 
     /// Runs a full TLS handshake between this server pair and a client that
@@ -336,6 +357,18 @@ mod tests {
             pair.fingerprint,
             self_signed("192.168.1.10", now).unwrap().fingerprint
         );
+    }
+
+    #[test]
+    fn only_a_self_signed_pair_from_lodger_carries_the_mark() {
+        let ours = self_signed("192.168.1.10", SystemTime::now()).unwrap();
+        assert!(made_by_lodger(ours.cert_pem.as_bytes()));
+        // A pair from another tool, and no certificate at all.
+        let dir = tempfile::tempdir().unwrap();
+        let other = test_pair::write(dir.path(), "a", (2031, 1, 1));
+        assert!(!made_by_lodger(&std::fs::read(&other.cert).unwrap()));
+        assert!(!made_by_lodger(ours.key_pem.as_bytes()));
+        assert!(!made_by_lodger(b"not PEM"));
     }
 
     #[test]

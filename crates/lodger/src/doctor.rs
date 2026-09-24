@@ -103,7 +103,9 @@ fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Chec
                             tls_cert and tls_key to the copies, then run: sudo systemctl \
                             restart lodger";
     const NEW_PAIR: &str = "or make a new self-signed pair (the browser then shows a new \
-                            fingerprint): sudo lodger install --self-signed <ip-or-name>";
+                            fingerprint). If tls_cert and tls_key name your own certificate, \
+                            first remove them and move that pair away, then run: sudo lodger \
+                            install --self-signed <ip-or-name>";
     let Some(files) = tls else {
         return Check::skip(
             NAME,

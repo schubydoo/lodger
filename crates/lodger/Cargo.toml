@@ -35,7 +35,6 @@ rustls-pki-types = { version = "1.15.1", features = ["std"] }
 x509-cert = "0.3.0"
 rcgen = "0.14.10"
 toml_edit = "0.25.15"
-time = "0.3.55"
 
 [lints]
 workspace = true
