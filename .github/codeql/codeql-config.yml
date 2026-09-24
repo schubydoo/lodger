@@ -1,0 +1,19 @@
+# CodeQL configuration, read by .github/workflows/codeql.yml.
+#
+# `rust/hard-coded-cryptographic-value` treats every constant that reaches a
+# key, password, salt, or IV parameter as a hard-coded secret. In Lodger, all
+# 28 of its alerts on 2026-09-24 were fixed test passwords: 25 in
+# `#[cfg(test)]` modules and 3 in crates/lodger/tests/binary.rs. The main
+# ruleset's CodeQL gate blocks a pull request on a new critical alert, so
+# every test that used a test password in a new place blocked its pull
+# request. Rust keeps unit tests in the source files, so `paths-ignore` cannot
+# leave out only the tests.
+#
+# The query also flags hard-coded keys, salts, and initialization vectors, and
+# this filter stops that check in production code too. gitleaks (security.yml)
+# still scans every commit for secret-shaped strings, but it does not find a
+# constant salt or an all-zero nonce, so review new cryptographic code for
+# those by hand. Review rule 8 forbids a secret in any log line.
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value

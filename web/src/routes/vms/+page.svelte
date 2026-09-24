@@ -4,7 +4,9 @@
 	import * as Table from '$lib/components/ui/table';
 	import StateBadge from '$lib/components/StateBadge.svelte';
 	import VmActions from '$lib/components/VmActions.svelte';
-	import { fetchVms, formatKib, keys } from '$lib/api';
+	import { Button } from '$lib/components/ui/button';
+	import { fetchVms, formatKib, keys, skipText } from '$lib/api';
+	import { lastDeletion } from '$lib/deletion.svelte';
 
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
 </script>
@@ -12,6 +14,36 @@
 <svelte:head><title>Virtual machines · Lodger</title></svelte:head>
 
 <h1 class="mb-6 text-2xl font-semibold">Virtual machines</h1>
+
+{#if lastDeletion.current}
+	{@const { name, removal } = lastDeletion.current}
+	<div role="status" class="mb-6 rounded-xl border bg-card p-4 text-sm">
+		<p class="font-medium">
+			Deleted {name}.
+			{removal.removed.length === 0
+				? 'No volume was deleted.'
+				: `Deleted ${removal.removed.length} volume${removal.removed.length === 1 ? '' : 's'}.`}
+		</p>
+		{#if removal.removed.length > 0}
+			<ul class="mt-2 list-disc pl-5">
+				{#each removal.removed as path (path)}
+					<li class="break-all">{path}</li>
+				{/each}
+			</ul>
+		{/if}
+		{#if removal.skipped.length > 0}
+			<p class="mt-2">Kept, because:</p>
+			<ul class="mt-1 list-disc pl-5">
+				{#each removal.skipped as disk (disk.path)}
+					<li class="break-all">{disk.path}: {skipText(disk)}</li>
+				{/each}
+			</ul>
+		{/if}
+		<Button class="mt-3" variant="outline" size="sm" onclick={() => (lastDeletion.current = null)}>
+			Dismiss
+		</Button>
+	</div>
+{/if}
 
 {#if vms.isPending}
 	<p>Loading the virtual machines…</p>

@@ -91,14 +91,44 @@ export const keys = {
 	stats: ['stats'] as const
 };
 
+/**
+ * The cause and the fix of a known libvirt error
+ * (`crates/lodger-virt/src/errors.rs`). `commands` run on the host.
+ */
+export interface Explanation {
+	cause: string;
+	fix: string;
+	commands: string[];
+}
+
 /** An error answer, with its status so the app can react to a 401. */
 export class ApiError extends Error {
 	constructor(
 		readonly status: number,
-		message: string
+		message: string,
+		readonly explanation?: Explanation
 	) {
 		super(message);
 	}
+}
+
+/** The explanation that an error answer carried, if any. */
+export function explanationOf(error: unknown): Explanation | undefined {
+	return error instanceof ApiError ? error.explanation : undefined;
+}
+
+/** Reads `cause`, `fix`, and `commands` from an error body, if all are there. */
+function readExplanation(data: unknown): Explanation | undefined {
+	const d = data as Partial<Record<keyof Explanation, unknown>> | null;
+	if (
+		typeof d?.cause === 'string' &&
+		typeof d.fix === 'string' &&
+		Array.isArray(d.commands) &&
+		d.commands.every((c) => typeof c === 'string')
+	) {
+		return { cause: d.cause, fix: d.fix, commands: d.commands };
+	}
+	return undefined;
 }
 
 async function getJson<T>(path: string, fetcher: typeof fetch = fetch): Promise<T> {
@@ -114,7 +144,7 @@ async function getJson<T>(path: string, fetcher: typeof fetch = fetch): Promise<
  * `error`, which the pages show as it is.
  */
 export async function send<T>(
-	method: 'POST' | 'DELETE',
+	method: 'POST' | 'PATCH' | 'DELETE',
 	path: string,
 	options: { body?: unknown; csrf?: string; fetcher?: typeof fetch } = {}
 ): Promise<T> {
@@ -137,7 +167,8 @@ export async function send<T>(
 		const message = (data as { error?: unknown } | null)?.error;
 		throw new ApiError(
 			res.status,
-			typeof message === 'string' ? message : `${path} answered ${res.status} ${res.statusText}`
+			typeof message === 'string' ? message : `${path} answered ${res.status} ${res.statusText}`,
+			readExplanation(data)
 		);
 	}
 	return data as T;
@@ -155,7 +186,7 @@ export function problemText(error: unknown): string {
 }
 
 /** A power action on a VM (`crates/lodger-virt/src/power.rs`). */
-export type VmAction = 'start' | 'shutdown' | 'force-off';
+export type VmAction = 'start' | 'shutdown' | 'force-off' | 'reboot' | 'pause' | 'resume';
 
 /**
  * Asks for a power action. A 204 means that libvirt took the call: the new
@@ -172,6 +203,61 @@ export function vmAction(
 		csrf: options.csrf,
 		fetcher: options.fetcher
 	});
+}
+
+/** Switches autostart. The inventory refreshes through the events socket. */
+export function setAutostart(
+	id: string,
+	autostart: boolean,
+	options: { csrf?: string; fetcher?: typeof fetch } = {}
+): Promise<null> {
+	return send<null>('PATCH', `/api/vms/${id}`, { body: { autostart }, ...options });
+}
+
+/** A disk that a delete kept (`crates/lodger/src/actions.rs`). */
+export interface SkippedDisk {
+	path: string;
+	reason: 'used_by' | 'shared' | 'not_in_pool' | 'failed';
+	/** For `used_by`: the VM that uses the disk. */
+	vm?: string;
+	/** For `failed`: libvirt's message. */
+	message?: string;
+}
+
+/** What a delete did with the VM's disks. */
+export interface Removal {
+	removed: string[];
+	skipped: SkippedDisk[];
+}
+
+/**
+ * Deletes a shut-off VM. `confirm` is the VM's name as the user typed it.
+ * With `removeVolumes`, libvirt also deletes the volumes that no other VM
+ * uses.
+ */
+export function deleteVm(
+	id: string,
+	options: { confirm: string; removeVolumes: boolean; csrf?: string; fetcher?: typeof fetch }
+): Promise<Removal> {
+	return send<Removal>('DELETE', `/api/vms/${id}`, {
+		body: { confirm: options.confirm, remove_volumes: options.removeVolumes },
+		csrf: options.csrf,
+		fetcher: options.fetcher
+	});
+}
+
+/** Why a delete kept a disk, as a clause for a sentence. */
+export function skipText(disk: SkippedDisk): string {
+	switch (disk.reason) {
+		case 'used_by':
+			return `${disk.vm} uses it`;
+		case 'shared':
+			return 'it is read-only or shareable';
+		case 'not_in_pool':
+			return 'no storage pool holds it';
+		case 'failed':
+			return `libvirt refused: ${disk.message}`;
+	}
 }
 
 /** The session, or `null` when nobody is logged in. */

@@ -47,6 +47,9 @@ pub enum Error {
     /// start of a running domain.
     #[error("{0}")]
     WrongState(&'static str),
+    /// libvirt returned XML that Lodger cannot read.
+    #[error(transparent)]
+    Xml(#[from] lodger_core::xml::XmlError),
 }
 
 impl Error {
@@ -55,6 +58,12 @@ impl Error {
         use virt::error::ErrorNumber::{NoDomain, NoNetwork, NoStoragePool};
         matches!(self, Self::Libvirt(e)
             if matches!(e.code().known(), Some(NoDomain | NoNetwork | NoStoragePool)))
+    }
+
+    /// The cause and the fix of a known libvirt error (`errors.rs`). It
+    /// reads the whole text, which holds libvirt's message.
+    pub fn explanation(&self) -> Option<&'static crate::errors::Explanation> {
+        crate::errors::explain(&self.to_string())
     }
 
     /// `true` when the object is in the wrong state for the call, for
@@ -165,7 +174,7 @@ pub struct Virt {
     job: Arc<Connection>,
     fast: Arc<Semaphore>,
     long: Arc<Semaphore>,
-    hub: broadcast::Sender<Event>,
+    pub(crate) hub: broadcast::Sender<Event>,
 }
 
 impl Virt {

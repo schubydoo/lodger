@@ -1,0 +1,6 @@
+<network>
+  <name>lan</name>
+  <uuid>ea5fcbb0-0932-45cf-bb30-ad1d23cb9605</uuid>
+  <forward mode='bridge'/>
+  <bridge name='br0'/>
+</network>

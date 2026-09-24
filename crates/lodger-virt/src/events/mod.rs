@@ -55,6 +55,9 @@ pub enum DomainChange {
     DeviceAdded,
     DeviceRemoved,
     Metadata,
+    /// Autostart changed. libvirt has no event for it, so Lodger sends this
+    /// one itself after a change through `Virt::set_autostart`.
+    Autostart,
 }
 
 #[cfg(test)]
