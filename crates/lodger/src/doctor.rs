@@ -5,7 +5,7 @@
 //! the host, such as `SELinux` on Debian, is skipped. Doctor changes nothing.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::config::{Config, Overrides, TlsFiles};
@@ -115,7 +115,7 @@ fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Chec
     // the lodger user. Without that user, the group check already fails.
     if let Some(account) = service_account(root) {
         for path in [&files.cert, &files.key] {
-            if let Some(why) = unreadable(path, &account) {
+            if let Some(why) = unreadable(root, path, &account) {
                 return Check::fail(NAME, why, &[READ_FIX]);
             }
         }
@@ -296,7 +296,7 @@ fn service_account(root: &Path) -> Option<Account> {
 /// Why `account` cannot read `path`, from the mode bits of the file and of
 /// each folder above it, or `None` if it can. Access control lists are not
 /// read.
-fn unreadable(path: &Path, account: &Account) -> Option<String> {
+fn unreadable(root: &Path, path: &Path, account: &Account) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     // The owner bits apply to the owner, even if the group bits would allow.
     let allows = |meta: &std::fs::Metadata, owner: u32, group: u32, other: u32| {
@@ -315,11 +315,18 @@ fn unreadable(path: &Path, account: &Account) -> Option<String> {
         Ok(target) => target,
         Err(e) => return Some(format!("cannot read {}: {e}", path.display())),
     };
-    if let Some(tree) = hidden_by_unit(&target) {
-        return Some(format!(
-            "{} is below {tree}, which the service cannot see (ProtectHome=yes in its unit)",
-            target.display()
-        ));
+    // The service opens the path as written, so a hidden folder on either
+    // path stops it before any mode bit counts.
+    let written = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    for seen in [&written, &target] {
+        if let Some(tree) = hidden_by_unit(root, seen) {
+            return Some(format!(
+                "{} is below {}, which the service cannot see (ProtectHome=yes and \
+                 PrivateTmp=yes in its unit)",
+                seen.display(),
+                tree.display()
+            ));
+        }
     }
     let folders = path.ancestors().skip(1).chain(target.ancestors().skip(1));
     for dir in folders.filter(|d| !d.as_os_str().is_empty()) {
@@ -342,11 +349,16 @@ fn unreadable(path: &Path, account: &Account) -> Option<String> {
     }
 }
 
-/// The tree that `ProtectHome=yes` in `dist/lodger.service` hides from the
-/// service, if `path` is below one.
-fn hidden_by_unit(path: &Path) -> Option<&'static str> {
-    ["/home", "/root", "/run/user"]
-        .into_iter()
+/// The folders below the root that `dist/lodger.service` hides from the
+/// service: `ProtectHome=yes` hides the first three, and `PrivateTmp=yes`
+/// gives the service its own empty `/tmp` and `/var/tmp`.
+const HIDDEN_BY_UNIT: [&str; 5] = ["home", "root", "run/user", "tmp", "var/tmp"];
+
+/// The hidden folder that `path` is below, if any.
+fn hidden_by_unit(root: &Path, path: &Path) -> Option<PathBuf> {
+    HIDDEN_BY_UNIT
+        .iter()
+        .map(|tree| root.join(tree))
         .find(|tree| path.starts_with(tree))
 }
 
@@ -841,16 +853,80 @@ mod tests {
     }
 
     #[test]
-    fn the_unit_hides_home_root_and_run_user() {
-        for hidden in ["/home/a/key.pem", "/root/key.pem", "/run/user/1000/key.pem"] {
-            assert!(hidden_by_unit(Path::new(hidden)).is_some(), "{hidden}");
+    fn the_unit_hides_home_root_run_user_and_both_tmp_folders() {
+        let root = Path::new("/");
+        for hidden in [
+            "/home/a/key.pem",
+            "/root/key.pem",
+            "/run/user/1000/key.pem",
+            "/tmp/key.pem",
+            "/var/tmp/x/key.pem",
+        ] {
+            assert!(
+                hidden_by_unit(root, Path::new(hidden)).is_some(),
+                "{hidden}"
+            );
         }
         for seen in [
             "/etc/lodger/tls/key.pem",
             "/homes/key.pem",
             "/run/lodger/key.pem",
+            "/tmpfiles/key.pem",
+            "/var/lib/lodger/key.pem",
         ] {
-            assert!(hidden_by_unit(Path::new(seen)).is_none(), "{seen}");
+            assert!(hidden_by_unit(root, Path::new(seen)).is_none(), "{seen}");
         }
+    }
+
+    #[test]
+    fn tls_fails_for_a_written_path_in_a_hidden_folder_that_links_out() {
+        use std::os::unix::fs::PermissionsExt;
+        // The pair itself is outside every hidden folder of the test root and
+        // readable by all.
+        let pairs = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(pairs.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let real = crate::tls::test_pair::write(pairs.path(), "a", (2031, 1, 1));
+        for path in [&real.cert, &real.key] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        // The configuration names links in <root>/home/admin/tls, which the
+        // unit hides, even with open folders.
+        let host = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+        let home = host.path().join("home/admin/tls");
+        std::fs::create_dir_all(&home).unwrap();
+        for folder in ["home", "home/admin", "home/admin/tls"] {
+            std::fs::set_permissions(
+                host.path().join(folder),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        let links = TlsFiles {
+            cert: home.join("cert.pem"),
+            key: home.join("key.pem"),
+        };
+        std::os::unix::fs::symlink(&real.cert, &links.cert).unwrap();
+        std::os::unix::fs::symlink(&real.key, &links.key).unwrap();
+
+        // The real files pass; the links in home do not.
+        assert_eq!(
+            tls_certificate(host.path(), Some(&real), SystemTime::UNIX_EPOCH).outcome,
+            Outcome::Pass
+        );
+        let c = tls_certificate(host.path(), Some(&links), SystemTime::UNIX_EPOCH);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(
+            c.reason.contains("home/admin/tls/cert.pem is below "),
+            "{}",
+            c.reason
+        );
+        assert!(
+            c.reason.contains("which the service cannot see"),
+            "{}",
+            c.reason
+        );
     }
 }
