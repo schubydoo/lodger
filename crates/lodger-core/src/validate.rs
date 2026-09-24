@@ -63,6 +63,75 @@ pub enum InputError {
         other_name: String,
         other_subnet: Ipv4Net,
     },
+    #[error("{field} must be an absolute path that starts with /")]
+    PathNotAbsolute { field: &'static str },
+    #[error("{field} must not contain . or .. as a folder name")]
+    PathDotSegment { field: &'static str },
+    #[error(
+        "{field} is {path}, a system folder. Use a folder of its own, such as /var/lib/libvirt/images"
+    )]
+    SystemPath { field: &'static str, path: String },
+    #[error("{field} is not a host name or an IP address")]
+    HostSyntax { field: &'static str },
+    #[error("{field} is the folder of pool {other_name:?} already")]
+    PathInUse {
+        field: &'static str,
+        other_name: String,
+    },
+    #[error("pool {other_name:?} mounts this NFS export already")]
+    NfsExportInUse { other_name: String },
+}
+
+/// The longest path Lodger accepts, as Linux `PATH_MAX`.
+pub const PATH_MAX_LEN: usize = 4096;
+
+/// Checks an absolute path and returns it in its plain form: one slash
+/// between folders and no slash at the end. `.` and `..` are rejected, so the
+/// plain form names the same place as the input.
+pub fn parse_path(field: &'static str, value: &str) -> Result<String, InputError> {
+    check_text(field, value)?;
+    if value.is_empty() {
+        return Err(InputError::Empty { field });
+    }
+    if !value.starts_with('/') {
+        return Err(InputError::PathNotAbsolute { field });
+    }
+    if value.len() > PATH_MAX_LEN {
+        return Err(InputError::TooLong {
+            field,
+            len: value.len(),
+            max: PATH_MAX_LEN,
+        });
+    }
+    let parts: Vec<&str> = value.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.iter().any(|p| matches!(*p, "." | "..")) {
+        return Err(InputError::PathDotSegment { field });
+    }
+    Ok(format!("/{}", parts.join("/")))
+}
+
+/// Checks a host name, an IPv4 address, or an IPv6 address, such as an NFS
+/// server. The allowed characters keep it safe in a mount command line.
+pub fn parse_host(field: &'static str, value: &str) -> Result<String, InputError> {
+    check_text(field, value)?;
+    if value.is_empty() {
+        return Err(InputError::Empty { field });
+    }
+    // 253 is the longest DNS name.
+    if value.len() > 253 {
+        return Err(InputError::TooLong {
+            field,
+            len: value.len(),
+            max: 253,
+        });
+    }
+    let fine = value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+    if !fine || value.starts_with(['-', '.']) {
+        return Err(InputError::HostSyntax { field });
+    }
+    Ok(value.to_owned())
 }
 
 /// Rejects free text that contains a NUL byte, for example an SSH key or a
@@ -446,5 +515,44 @@ mod tests {
             assert_eq!(check_no_overlap("subnet", net(s), existing), Ok(()));
         }
         assert_eq!(check_no_overlap("subnet", net("10.0.0.0/8"), []), Ok(()));
+    }
+
+    #[test]
+    fn a_path_comes_back_in_its_plain_form() {
+        assert_eq!(parse_path("Path", "/srv//vm/").unwrap(), "/srv/vm");
+        assert_eq!(parse_path("Path", "/").unwrap(), "/");
+        assert_eq!(
+            parse_path("Path", ""),
+            Err(InputError::Empty { field: "Path" })
+        );
+        assert_eq!(
+            parse_path("Path", "srv"),
+            Err(InputError::PathNotAbsolute { field: "Path" })
+        );
+        assert_eq!(
+            parse_path("Path", "/a/../b"),
+            Err(InputError::PathDotSegment { field: "Path" })
+        );
+        // A name that only starts with dots is a normal folder name.
+        assert_eq!(parse_path("Path", "/a/..b/.c").unwrap(), "/a/..b/.c");
+        let long = format!("/{}", "a".repeat(PATH_MAX_LEN));
+        assert!(matches!(
+            parse_path("Path", &long),
+            Err(InputError::TooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn hosts_allow_names_and_addresses_only() {
+        for host in ["nas", "nas.lan", "10.0.0.5", "fd00::5", "a-b.example.com"] {
+            assert_eq!(parse_host("Host", host).unwrap(), host);
+        }
+        for host in ["", "-o", ".lan", "nas lan", "nas/x", "nas;x", "n\0as"] {
+            assert!(parse_host("Host", host).is_err(), "{host}");
+        }
+        assert!(matches!(
+            parse_host("Host", &"a".repeat(254)),
+            Err(InputError::TooLong { .. })
+        ));
     }
 }

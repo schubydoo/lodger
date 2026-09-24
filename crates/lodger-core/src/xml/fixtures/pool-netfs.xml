@@ -1,0 +1,25 @@
+<pool type='netfs' xmlns:fs='http://libvirt.org/schemas/storagepool/fs/1.0'>
+  <name>nas-images</name>
+  <uuid>94666de6-2833-420d-997a-3fa49ed0540b</uuid>
+  <capacity unit='bytes'>0</capacity>
+  <allocation unit='bytes'>0</allocation>
+  <available unit='bytes'>0</available>
+  <source>
+    <host name='nas.lan'/>
+    <dir path='/volume1/vm'/>
+    <format type='nfs'/>
+    <protocol ver='4.1'/>
+  </source>
+  <target>
+    <path>/var/lib/libvirt/nas</path>
+    <permissions>
+      <mode>0755</mode>
+      <owner>64055</owner>
+      <group>994</group>
+      <label>system_u:object_r:virt_image_t:s0</label>
+    </permissions>
+  </target>
+  <fs:mount_opts>
+    <fs:option name='noatime'/>
+  </fs:mount_opts>
+</pool>

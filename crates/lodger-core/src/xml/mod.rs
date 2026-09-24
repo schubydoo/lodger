@@ -1,9 +1,14 @@
-//! Reads libvirt XML with xmltree, never with a string search (TAD 5.2).
+//! Reads and builds libvirt XML with xmltree, never with a string search
+//! or by joining strings (TAD 5.2).
 //!
 //! Every parse rejects a `<!DOCTYPE`: libvirt never writes one, and a
-//! document type is the way in for entity attacks.
+//! document type is the way in for entity attacks. The `attribute-order`
+//! feature keeps attributes in their order, so [`write`] gives the same text
+//! on every run, and tests can compare it.
 
-use xmltree::{Element, XMLNode};
+pub mod pool;
+
+use xmltree::{Element, EmitterConfig, XMLNode};
 
 /// Why a document cannot be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -32,6 +37,37 @@ pub fn parse(xml: &str, root: &'static str) -> Result<Element, XmlError> {
         });
     }
     Ok(element)
+}
+
+/// Writes `element` as indented XML without a declaration, like libvirt.
+pub fn write(element: &Element) -> String {
+    let mut out = Vec::new();
+    let config = EmitterConfig::new()
+        .perform_indent(true)
+        .indent_string("  ")
+        .write_document_declaration(false);
+    element
+        .write_with_config(&mut out, config)
+        .expect("writing to a Vec cannot fail");
+    String::from_utf8(out).expect("xmltree writes UTF-8")
+}
+
+/// A new element with a text child, such as `<name>web</name>`.
+pub(crate) fn text_element(name: &str, text: &str) -> Element {
+    let mut element = Element::new(name);
+    element.children.push(XMLNode::Text(text.to_owned()));
+    element
+}
+
+/// A new element with attributes in the given order.
+pub(crate) fn element_with(name: &str, attributes: &[(&str, &str)]) -> Element {
+    let mut element = Element::new(name);
+    for (key, value) in attributes {
+        element
+            .attributes
+            .insert((*key).to_owned(), (*value).to_owned());
+    }
+    element
 }
 
 /// Where the data of a disk lives.
