@@ -15,6 +15,7 @@ use uuid::Uuid;
 use virt::connect::Connect;
 use virt::error::ErrorNumber;
 use virt::storage_pool::StoragePool;
+use virt::storage_vol::StorageVol;
 use virt::sys::VIR_DOMAIN_XML_INACTIVE;
 
 use crate::conn::{Error, Virt};
@@ -84,7 +85,7 @@ impl Virt {
     /// first deletes every volume in the pool, and then the pool's folder or
     /// NFS mount folder.
     pub async fn remove_pool(&self, id: Uuid, delete_files: bool) -> Result<(), Error> {
-        self.job(move |c| remove_pool_on(c, id, delete_files, |_| {}))
+        self.job(move |c| remove_pool_on(c, id, delete_files, |v| v.delete(0), |_| {}))
             .await
     }
 }
@@ -103,23 +104,38 @@ fn xmls_of(pools: Vec<StoragePool>) -> Result<Vec<(String, String)>, virt::error
     Ok(out)
 }
 
-/// The removal itself. `before_stop` runs after the volumes are gone and
-/// before the pool stops; the tests use it to look at the pool.
+/// The removal itself. `delete_volume` deletes one volume, and `before_stop`
+/// runs after the volumes are gone and before the pool stops; the tests use
+/// them to fail a delete and to look at the pool. If a volume
+/// cannot be deleted, a pool that was stopped is stopped again. If the folder
+/// cannot be deleted at the end, the pool stays defined, stopped, and empty,
+/// so the user can try again.
 fn remove_pool_on(
     c: &Connect,
     id: Uuid,
     delete_files: bool,
+    delete_volume: impl Fn(&StorageVol) -> Result<(), virt::error::Error>,
     before_stop: impl FnOnce(&StoragePool),
 ) -> Result<(), virt::error::Error> {
     let pool = c.lookup_storage_pool_by_uuid(id)?;
     if delete_files {
         // The volumes are listed only while the pool runs.
-        if !pool.is_active()? {
+        let was_active = pool.is_active()?;
+        if !was_active {
             pool.create(0)?;
         }
-        pool.refresh(0)?;
-        for volume in pool.list_all_volumes(0)? {
-            volume.delete(0)?;
+        let deleted = pool.refresh(0).and_then(|()| {
+            for volume in pool.list_all_volumes(0)? {
+                delete_volume(&volume)?;
+            }
+            Ok(())
+        });
+        if let Err(e) = deleted {
+            // Best effort: a failed removal leaves the pool as it was.
+            if !was_active {
+                let _ = pool.destroy();
+            }
+            return Err(e);
         }
     }
     before_stop(&pool);
@@ -132,8 +148,8 @@ fn remove_pool_on(
     pool.undefine()
 }
 
-/// The create itself. `before_start` runs after the build; the tests use it
-/// to make the start fail.
+/// The create itself. `before_start` runs after the build and the autostart;
+/// the tests use it to make the start fail.
 fn create_pool_on(
     c: &Connect,
     xml: &str,
@@ -141,11 +157,15 @@ fn create_pool_on(
     before_start: impl FnOnce(&StoragePool),
 ) -> Result<Uuid, virt::error::Error> {
     let pool = c.define_storage_pool_xml(xml, 0)?;
-    let started = pool.build(0).and_then(|()| {
-        before_start(&pool);
-        pool.create(0)?;
-        pool.set_autostart(autostart)
-    });
+    // Autostart before the start: the start event makes the inventory read
+    // the pool, and libvirt sends no event for autostart itself.
+    let started = pool
+        .build(0)
+        .and_then(|()| pool.set_autostart(autostart))
+        .and_then(|()| {
+            before_start(&pool);
+            pool.create(0)
+        });
     match started {
         Ok(()) => pool.uuid(),
         Err(e) => {
@@ -291,6 +311,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn autostart_is_set_before_the_start_event() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let xml = dir_xml("pool-order");
+        let seen = virt
+            .job(move |c| {
+                let mut seen = None;
+                let look =
+                    |p: &virt::storage_pool::StoragePool| seen = Some(p.autostart().unwrap());
+                let id = super::create_pool_on(c, &xml, true, look)?;
+                Ok((id, seen))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.1,
+            Some(true),
+            "autostart was off when the pool started"
+        );
+        virt.remove_pool(seen.0, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failed_volume_delete_stops_the_pool_again() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let id = virt.create_pool(dir_xml("pool-stuck"), true).await.unwrap();
+        virt.read(move |c| {
+            let pool = c.lookup_storage_pool_by_uuid(id)?;
+            let xml = "<volume><name>busy.img</name><capacity>1024</capacity></volume>";
+            StorageVol::create_xml(&pool, xml, 0).map(drop)
+        })
+        .await
+        .unwrap();
+        virt.set_pool_active(id, false).await.unwrap();
+        let result = virt
+            .job(move |c| {
+                let busy = |_: &StorageVol| {
+                    let pool = c.lookup_storage_pool_by_uuid(Uuid::nil());
+                    pool.map(drop)
+                };
+                Ok(super::remove_pool_on(c, id, true, busy, |_| {}))
+            })
+            .await
+            .unwrap();
+        assert!(result.is_err());
+        // Still defined, and stopped as before.
+        assert_eq!(state(&virt, id).await, (false, true));
+        virt.remove_pool(id, false).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn the_users_of_a_pool_are_the_vms_with_a_disk_in_it() {
         let virt = Virt::open(TEST_URI).await.unwrap();
         let id = virt.create_pool(dir_xml("pool-users"), true).await.unwrap();
@@ -352,7 +422,7 @@ mod tests {
                 let look = |p: &virt::storage_pool::StoragePool| {
                     left = Some(p.list_all_volumes(0).unwrap().len());
                 };
-                super::remove_pool_on(c, id, true, look)?;
+                super::remove_pool_on(c, id, true, |v| v.delete(0), look)?;
                 Ok(left)
             })
             .await
