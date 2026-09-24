@@ -12,6 +12,7 @@ ipnet = "2.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 uuid = { version = "1.26.1", features = ["serde"] }
+xmltree = { version = "0.12.0", features = ["attribute-order"] }
 
 [dev-dependencies]
 serde_json = "=1.0.151"

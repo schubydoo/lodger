@@ -111,12 +111,17 @@ component_management:
         - crates/lodger-core/src/model/volume.rs
         - crates/lodger-core/src/password/mod.rs
         - crates/lodger-core/src/validate.rs
+        - crates/lodger-core/src/xml/mod.rs
+        - crates/lodger-core/src/xml/network.rs
+        - crates/lodger-core/src/xml/pool.rs
     - component_id: lodger-virt
       name: lodger-virt (libvirt adapter)
       paths:
         - crates/lodger-virt/src/lib.rs
         - crates/lodger-virt/src/cache.rs
         - crates/lodger-virt/src/conn.rs
+        - crates/lodger-virt/src/delete.rs
+        - crates/lodger-virt/src/errors.rs
         - crates/lodger-virt/src/console.rs
         - crates/lodger-virt/src/events/mod.rs
         - crates/lodger-virt/src/power.rs
