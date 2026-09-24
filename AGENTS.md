@@ -60,7 +60,10 @@ Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
   `.github/workflows/nightly.yml`. A CI guard searches the crates for the word, comments
   included. In a comment elsewhere, write "state-changing" or another word.
 - Only `lodger-virt` imports `virt`. Lodger calls libvirt through the Rust bindings.
-  Never add a subprocess call (`virsh`, `qemu-img`, or a shell).
+  Never add a subprocess call (`virsh`, `qemu-img`, or a shell). The one exception is
+  `crates/lodger/src/install.rs`: `lodger install` and `uninstall` run `systemd-sysusers`,
+  `userdel`, and `systemctl` with fixed argument lists, because Rust cannot create a
+  system user.
 - libvirt is the source of truth for VMs, pools, networks, and snapshots. SQLite holds
   only accounts, sessions, recovery codes, the audit log, and UI settings.
 - Build XML and YAML with the builders, never by joining strings.
