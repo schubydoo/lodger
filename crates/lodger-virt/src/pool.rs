@@ -13,6 +13,7 @@ use lodger_core::xml::pool::PoolXml;
 use lodger_core::xml::{DiskSource, domain_disks};
 use uuid::Uuid;
 use virt::connect::Connect;
+use virt::error::ErrorNumber;
 use virt::storage_pool::StoragePool;
 use virt::sys::VIR_DOMAIN_XML_INACTIVE;
 
@@ -26,14 +27,9 @@ pub(crate) const POOL_AUTOSTART: i32 = -1;
 
 impl Virt {
     /// The XML of every pool, with its name, for the checks of a new pool.
+    /// A pool that disappears during the list is left out.
     pub async fn pool_xmls(&self) -> Result<Vec<(String, String)>, Error> {
-        self.read(|c| {
-            c.list_all_storage_pools(0)?
-                .iter()
-                .map(|p| Ok((p.name()?, p.xml_desc(0)?)))
-                .collect()
-        })
-        .await
+        self.read(|c| xmls_of(c.list_all_storage_pools(0)?)).await
     }
 
     /// The XML of pool `id`.
@@ -91,6 +87,20 @@ impl Virt {
         self.job(move |c| remove_pool_on(c, id, delete_files, |_| {}))
             .await
     }
+}
+
+/// The name and XML of each pool. A pool that another client removed after
+/// the list is left out.
+fn xmls_of(pools: Vec<StoragePool>) -> Result<Vec<(String, String)>, virt::error::Error> {
+    let mut out = Vec::new();
+    for pool in pools {
+        match pool.name().and_then(|name| Ok((name, pool.xml_desc(0)?))) {
+            Ok(found) => out.push(found),
+            Err(e) if e.code().known() == Some(ErrorNumber::NoStoragePool) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(out)
 }
 
 /// The removal itself. `before_stop` runs after the volumes are gone and
@@ -357,6 +367,28 @@ mod tests {
             .await
             .unwrap();
         assert!(!volume_left);
+    }
+
+    #[tokio::test]
+    async fn a_pool_that_disappears_during_the_list_is_left_out() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let gone = virt.create_pool(dir_xml("pool-gone"), true).await.unwrap();
+        let kept = virt.create_pool(dir_xml("pool-kept"), true).await.unwrap();
+        let names = virt
+            .job(move |c| {
+                let pools = c.list_all_storage_pools(0)?;
+                // Another client removes one pool after the list.
+                let p = c.lookup_storage_pool_by_uuid(gone)?;
+                p.destroy()?;
+                p.undefine()?;
+                let xmls = super::xmls_of(pools)?;
+                Ok(xmls.into_iter().map(|(n, _)| n).collect::<Vec<_>>())
+            })
+            .await
+            .unwrap();
+        assert!(names.contains(&"pool-kept".to_owned()), "{names:?}");
+        assert!(!names.contains(&"pool-gone".to_owned()), "{names:?}");
+        virt.remove_pool(kept, false).await.unwrap();
     }
 
     #[tokio::test]
