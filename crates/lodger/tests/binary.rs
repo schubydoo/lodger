@@ -537,3 +537,176 @@ fn the_sixth_failed_login_waits_and_every_failure_is_logged() {
     );
     server.stop();
 }
+
+/// Writes a self-signed pair for `127.0.0.1` and returns the two paths and
+/// the certificate, which the test client trusts.
+fn tls_pair(
+    dir: &std::path::Path,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    tokio_rustls::rustls::pki_types::CertificateDer<'static>,
+) {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let (cert_path, key_path) = (dir.join("cert.pem"), dir.join("key.pem"));
+    std::fs::write(&cert_path, cert.pem()).unwrap();
+    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    (cert_path, key_path, cert.der().clone())
+}
+
+/// Starts `lodger serve` with a configuration file that holds `extra`, and
+/// returns the server, the address line, and the stderr pipe.
+fn serve_config(listen: &str, extra: &str) -> (Server, String, std::process::ChildStderr) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "uri = \"{TEST_URI}\"\nstate_dir = \"{}\"\n{extra}",
+            dir.path().join("state").display()
+        ),
+    )
+    .unwrap();
+    let mut child = lodger()
+        .args(["serve", "--listen", listen, "--config"])
+        .arg(&config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lodger serve starts");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    (Server { child, state: dir }, line, stderr)
+}
+
+fn tls_config(cert: &std::path::Path, key: &std::path::Path) -> String {
+    format!(
+        "tls_cert = \"{}\"\ntls_key = \"{}\"\n",
+        cert.display(),
+        key.display()
+    )
+}
+
+/// A GET over TLS that trusts only `root`.
+fn https_get(
+    addr: &str,
+    path: &str,
+    root: tokio_rustls::rustls::pki_types::CertificateDer<'static>,
+) -> String {
+    use std::sync::Arc;
+    use tokio_rustls::rustls;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(root).unwrap();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from("127.0.0.1".to_owned()).unwrap();
+    let conn = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+    let mut tls = rustls::StreamOwned::new(conn, TcpStream::connect(addr).unwrap());
+    write!(
+        tls,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    // The server may close without a TLS close_notify; the bytes read so
+    // far are the answer.
+    let _ = tls.read_to_end(&mut out);
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[test]
+fn serve_answers_https_with_the_configured_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key, root) = tls_pair(dir.path());
+    let (mut server, line, _stderr) = serve_config("127.0.0.1:0", &tls_config(&cert, &key));
+    let addr = line
+        .trim()
+        .strip_prefix("lodger listening on https://")
+        .unwrap_or_else(|| panic!("unexpected first line: {line}"))
+        .to_string();
+
+    let answer = https_get(&addr, "/api/health", root);
+    assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
+    assert!(answer.contains("\"database\""), "{answer}");
+
+    // Plain HTTP gets no HTTP answer: there is no fallback.
+    let mut plain = TcpStream::connect(&addr).unwrap();
+    plain
+        .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .unwrap();
+    // The server closes as soon as the first bytes are not TLS, so this write
+    // can fail with a broken pipe. That close is the behavior under test.
+    let _ = write!(plain, "GET /api/health HTTP/1.1\r\nHost: {addr}\r\n\r\n");
+    let mut out = Vec::new();
+    let _ = plain.read_to_end(&mut out);
+    assert!(
+        !String::from_utf8_lossy(&out).contains("HTTP/1.1"),
+        "{out:?}"
+    );
+    assert!(server.stop().success());
+}
+
+#[test]
+fn serve_refuses_to_start_with_a_bad_tls_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, _key, _) = tls_pair(dir.path());
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "uri = \"{TEST_URI}\"\nstate_dir = \"{}\"\n{}",
+            dir.path().join("state").display(),
+            tls_config(&cert, &dir.path().join("missing.pem"))
+        ),
+    )
+    .unwrap();
+    let out = lodger()
+        .args(["serve", "--listen", "127.0.0.1:0", "--config"])
+        .arg(&config)
+        .output()
+        .expect("lodger runs");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "no address line");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("cannot read the TLS key"), "{stderr}");
+    assert!(stderr.contains("missing.pem"), "{stderr}");
+    // The check comes first: no database was made.
+    assert!(!dir.path().join("state").exists());
+}
+
+#[test]
+fn only_a_non_loopback_address_without_tls_gets_the_clear_text_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key, _) = tls_pair(dir.path());
+    for (extra, warned, tls) in [
+        (String::new(), true, "TLS off".to_owned()),
+        (
+            tls_config(&cert, &key),
+            false,
+            format!("TLS {}", cert.display()),
+        ),
+    ] {
+        let (mut server, _line, mut stderr) = serve_config("0.0.0.0:0", &extra);
+        server.stop();
+        let mut log = String::new();
+        stderr.read_to_string(&mut log).unwrap();
+        assert_eq!(
+            log.contains("which is not loopback, without TLS"),
+            warned,
+            "{log}"
+        );
+        assert!(log.contains(&format!("trusted proxies, {tls}\n")), "{log}");
+    }
+}

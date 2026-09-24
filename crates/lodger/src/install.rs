@@ -102,10 +102,29 @@ impl Host {
 pub fn run_install() -> Result<String, String> {
     crate::admin::require_root(std::fs::read_to_string("/proc/self/status"), "install")?;
     let exe = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
-    let listen = install(&Host::new("/"), &exe, &mut System)?;
+    let host = Host::new("/");
+    let listen = install(&host, &exe, &mut System)?;
     wait_listening(listen, START_TIMEOUT)?;
+    ready_line(&host, listen)
+}
+
+/// The line that says where Lodger runs. The scheme follows the installed
+/// configuration, which may turn on TLS.
+fn ready_line(host: &Host, listen: SocketAddr) -> Result<String, String> {
+    let config = Config::load(
+        Overrides {
+            config: Some(host.path(CONFIG_FILE)),
+            ..Overrides::default()
+        },
+        None,
+    )?;
+    let scheme = if config.tls.is_some() {
+        "https"
+    } else {
+        "http"
+    };
     Ok(format!(
-        "Lodger runs at http://{listen}. Read the setup token with: sudo journalctl -u lodger"
+        "Lodger runs at {scheme}://{listen}. Read the setup token with: sudo journalctl -u lodger"
     ))
 }
 
@@ -794,6 +813,29 @@ mod tests {
         assert!(
             err.starts_with("cannot run /nonexistent/lodger-test"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn the_ready_line_follows_the_installed_configuration() {
+        let (_dir, host, exe) = ready_host();
+        let listen = install(&host, &exe, &mut Recorder::default()).unwrap();
+        assert!(
+            ready_line(&host, listen)
+                .unwrap()
+                .starts_with("Lodger runs at http://127.0.0.1:8460. ")
+        );
+        // A later install keeps an operator's TLS settings, so it says https.
+        put(
+            &host,
+            CONFIG_FILE,
+            "tls_cert = \"/etc/ssl/l.pem\"\ntls_key = \"/etc/ssl/l.key\"\n",
+        );
+        let listen = install(&host, &exe, &mut Recorder::default()).unwrap();
+        assert!(
+            ready_line(&host, listen)
+                .unwrap()
+                .starts_with("Lodger runs at https://127.0.0.1:8460. ")
         );
     }
 }

@@ -5,9 +5,10 @@
 //! the host, such as `SELinux` on Debian, is skipped. Doctor changes nothing.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-use crate::config::{Config, Overrides};
+use crate::config::{Config, Overrides, TlsFiles};
 
 /// The socket of the monolithic `libvirtd` or of `virtproxyd`, and the socket
 /// of the modular `virtqemud`.
@@ -23,6 +24,8 @@ const SELINUX_ENFORCE: &str = "sys/fs/selinux/enforce";
 const SELINUX_NFS: &str = "sys/fs/selinux/booleans/virt_use_nfs";
 /// The first libvirt that reverts external snapshots (PRD R5).
 const REVERT_VERSION: (u32, u32, u32) = (9, 9, 0);
+/// Doctor fails this long before the TLS certificate expires (Task 3.17).
+const TLS_WARNING: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -68,6 +71,11 @@ impl Check {
 pub fn run(overrides: Overrides) -> Result<String, String> {
     let config = Config::load(overrides, None)?;
     let mut checks = host_checks(Path::new("/"));
+    checks.push(tls_certificate(
+        Path::new("/"),
+        config.tls.as_ref(),
+        SystemTime::now(),
+    ));
     checks.extend(
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -81,6 +89,53 @@ pub fn run(overrides: Overrides) -> Result<String, String> {
         Ok(summary)
     } else {
         Err(summary)
+    }
+}
+
+/// The built-in TLS pair: it must load, the lodger user must be able to read
+/// it, and it must not expire within `TLS_WARNING`.
+fn tls_certificate(root: &Path, tls: Option<&TlsFiles>, now: SystemTime) -> Check {
+    const NAME: &str = "TLS certificate";
+    const FIX: &str = "replace the certificate and key named by tls_cert and tls_key in \
+                       /etc/lodger/config.toml, then run: sudo systemctl restart lodger";
+    const READ_FIX: &str = "copy the pair to /etc/lodger/tls/, give the key to the lodger \
+                            user (sudo chown lodger: key.pem, sudo chmod 0600 key.pem), set \
+                            tls_cert and tls_key to the copies, then run: sudo systemctl \
+                            restart lodger";
+    let Some(files) = tls else {
+        return Check::skip(
+            NAME,
+            "TLS is off: the configuration sets no tls_cert and tls_key",
+        );
+    };
+    if let Err(e) = crate::tls::server_config(files) {
+        return Check::fail(NAME, e, &[FIX]);
+    }
+    // doctor often runs as root, which reads any file, but the service runs as
+    // the lodger user. Without that user, the group check already fails.
+    if let Some(account) = service_account(root) {
+        for path in [&files.cert, &files.key] {
+            if let Some(why) = unreadable(root, path, &account) {
+                return Check::fail(NAME, why, &[READ_FIX]);
+            }
+        }
+    }
+    let not_after = match crate::tls::not_after(&files.cert) {
+        Ok(t) => t,
+        Err(e) => return Check::fail(NAME, e, &[FIX]),
+    };
+    let cert = files.cert.display();
+    let end = not_after.to_system_time();
+    if end <= now {
+        Check::fail(NAME, format!("{cert} expired on {not_after}"), &[FIX])
+    } else if end <= now + TLS_WARNING {
+        Check::fail(
+            NAME,
+            format!("{cert} expires on {not_after}, in less than 30 days"),
+            &[FIX],
+        )
+    } else {
+        Check::pass(NAME, format!("{cert} is valid until {not_after}"))
     }
 }
 
@@ -208,6 +263,103 @@ fn selinux(root: &Path) -> Check {
             &["sudo setsebool -P virt_use_nfs 1"],
         )
     }
+}
+
+/// The IDs that the service runs with.
+struct Account {
+    uid: u32,
+    /// The primary group and every group that lists the lodger user.
+    gids: Vec<u32>,
+}
+
+/// The lodger user's IDs from the files below `root`, if the user exists.
+fn service_account(root: &Path) -> Option<Account> {
+    let read = |file| std::fs::read_to_string(root.join(file)).unwrap_or_default();
+    let (users, groups) = (read(PASSWD_FILE), read(GROUP_FILE));
+    let user = entry(&users, "lodger")?;
+    let mut gids = vec![user.get(3)?.parse().ok()?];
+    for line in groups.lines() {
+        let fields: Vec<_> = line.split(':').collect();
+        let listed = fields
+            .get(3)
+            .is_some_and(|members| members.split(',').any(|m| m == "lodger"));
+        if listed && let Some(gid) = fields.get(2).and_then(|g| g.parse().ok()) {
+            gids.push(gid);
+        }
+    }
+    Some(Account {
+        uid: user.get(2)?.parse().ok()?,
+        gids,
+    })
+}
+
+/// Why `account` cannot read `path`, from the mode bits of the file and of
+/// each folder above it, or `None` if it can. Access control lists are not
+/// read.
+fn unreadable(root: &Path, path: &Path, account: &Account) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    // The owner bits apply to the owner, even if the group bits would allow.
+    let allows = |meta: &std::fs::Metadata, owner: u32, group: u32, other: u32| {
+        let bit = if meta.uid() == account.uid {
+            owner
+        } else if account.gids.contains(&meta.gid()) {
+            group
+        } else {
+            other
+        };
+        meta.mode() & bit != 0
+    };
+    // A symbolic link, like each file in certbot's live folder, makes the
+    // kernel open the folders of the link and then those of its target.
+    let target = match std::fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(e) => return Some(format!("cannot read {}: {e}", path.display())),
+    };
+    // The service opens the path as written, so a hidden folder on either
+    // path stops it before any mode bit counts.
+    let written = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    for seen in [&written, &target] {
+        if let Some(tree) = hidden_by_unit(root, seen) {
+            return Some(format!(
+                "{} is below {}, which the service cannot see (ProtectHome=yes and \
+                 PrivateTmp=yes in its unit)",
+                seen.display(),
+                tree.display()
+            ));
+        }
+    }
+    let folders = path.ancestors().skip(1).chain(target.ancestors().skip(1));
+    for dir in folders.filter(|d| !d.as_os_str().is_empty()) {
+        match std::fs::metadata(dir) {
+            Ok(meta) if allows(&meta, 0o100, 0o010, 0o001) => {}
+            Ok(_) => {
+                return Some(format!(
+                    "the lodger user cannot open the folder {}, so it cannot read {}",
+                    dir.display(),
+                    path.display()
+                ));
+            }
+            Err(e) => return Some(format!("cannot read {}: {e}", dir.display())),
+        }
+    }
+    match std::fs::metadata(&target) {
+        Ok(meta) if allows(&meta, 0o400, 0o040, 0o004) => None,
+        Ok(_) => Some(format!("the lodger user cannot read {}", path.display())),
+        Err(e) => Some(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+/// The folders below the root that `dist/lodger.service` hides from the
+/// service: `ProtectHome=yes` hides the first three, and `PrivateTmp=yes`
+/// gives the service its own empty `/tmp` and `/var/tmp`.
+const HIDDEN_BY_UNIT: [&str; 5] = ["home", "root", "run/user", "tmp", "var/tmp"];
+
+/// The hidden folder that `path` is below, if any.
+fn hidden_by_unit(root: &Path, path: &Path) -> Option<PathBuf> {
+    HIDDEN_BY_UNIT
+        .iter()
+        .map(|tree| root.join(tree))
+        .find(|tree| path.starts_with(tree))
 }
 
 /// The fields of the `name:...` line of `/etc/passwd` or `/etc/group`.
@@ -522,5 +674,259 @@ mod tests {
             "PASS  a: fine\nFAIL  b: broken\n      fix: cmd one\n      fix: cmd two\nSKIP  c: not here\n"
         );
         assert_eq!(summary(&checks), "1 passed, 1 failed, 1 skipped");
+    }
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    #[test]
+    fn tls_is_skipped_when_off() {
+        let check = tls_certificate(Path::new("/nonexistent"), None, SystemTime::now());
+        assert_eq!(check.outcome, Outcome::Skip, "{}", check.reason);
+    }
+
+    #[test]
+    fn tls_fails_30_days_before_the_certificate_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = crate::tls::test_pair::write(dir.path(), "a", (2031, 1, 1));
+        let end = crate::tls::not_after(&files.cert).unwrap().to_system_time();
+
+        let early = tls_certificate(Path::new("/nonexistent"), Some(&files), end - 31 * DAY);
+        assert_eq!(early.outcome, Outcome::Pass, "{}", early.reason);
+        assert!(
+            early
+                .reason
+                .ends_with("is valid until 2031-01-01T00:00:00Z"),
+            "{}",
+            early.reason
+        );
+
+        for now in [end - 30 * DAY, end - DAY] {
+            let soon = tls_certificate(Path::new("/nonexistent"), Some(&files), now);
+            assert_eq!(soon.outcome, Outcome::Fail, "{}", soon.reason);
+            assert!(
+                soon.reason.contains("in less than 30 days"),
+                "{}",
+                soon.reason
+            );
+            assert!(soon.fix[0].contains("sudo systemctl restart lodger"));
+        }
+
+        let late = tls_certificate(Path::new("/nonexistent"), Some(&files), end + DAY);
+        assert_eq!(late.outcome, Outcome::Fail, "{}", late.reason);
+        assert!(
+            late.reason.ends_with("expired on 2031-01-01T00:00:00Z"),
+            "{}",
+            late.reason
+        );
+    }
+
+    #[test]
+    fn tls_fails_when_the_pair_does_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = crate::tls::test_pair::write(dir.path(), "a", (2031, 1, 1));
+        let b = crate::tls::test_pair::write(dir.path(), "b", (2031, 1, 1));
+        let mixed = TlsFiles {
+            cert: a.cert,
+            key: b.key,
+        };
+        let check = tls_certificate(Path::new("/nonexistent"), Some(&mixed), SystemTime::now());
+        assert_eq!(check.outcome, Outcome::Fail, "{}", check.reason);
+        assert!(
+            check.reason.starts_with("cannot use the TLS certificate"),
+            "{}",
+            check.reason
+        );
+    }
+
+    #[test]
+    fn tls_fails_when_the_lodger_user_cannot_read_the_pair() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let set = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("tls");
+        std::fs::create_dir(&folder).unwrap();
+        set(dir.path(), 0o755);
+        set(&folder, 0o755);
+        let files = crate::tls::test_pair::write(&folder, "a", (2031, 1, 1));
+        set(&files.cert, 0o644);
+        let key = std::fs::metadata(&files.key).unwrap();
+        let check = |host: &tempfile::TempDir| {
+            tls_certificate(host.path(), Some(&files), SystemTime::UNIX_EPOCH)
+        };
+        // The lodger user is another user, in none of the key's groups.
+        let other = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+
+        set(&files.key, 0o600);
+        let c = check(&other);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(
+            c.reason.starts_with("the lodger user cannot read "),
+            "{}",
+            c.reason
+        );
+        assert!(c.reason.ends_with("a.key"), "{}", c.reason);
+        assert!(
+            c.fix[0].contains("sudo chown lodger: key.pem"),
+            "{:?}",
+            c.fix
+        );
+
+        set(&files.key, 0o644);
+        assert_eq!(check(&other).outcome, Outcome::Pass);
+
+        // A folder above that the user cannot open, like certbot's live folder.
+        set(&folder, 0o700);
+        let c = check(&other);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(c.reason.contains("cannot open the folder"), "{}", c.reason);
+        set(&folder, 0o755);
+
+        // The group bits apply to a member of the key's group.
+        set(&files.key, 0o640);
+        assert_eq!(check(&other).outcome, Outcome::Fail);
+        let member = format!("keys:x:{}:alice,lodger\n", key.gid());
+        let in_group = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, &member),
+        ]);
+        assert_eq!(check(&in_group).outcome, Outcome::Pass);
+
+        // The owner bits apply to the owner.
+        set(&files.key, 0o600);
+        let owner = format!("lodger:x:{}:4242::/:/x\n", key.uid());
+        let as_owner = root(&[(PASSWD_FILE, &owner), (GROUP_FILE, "")]);
+        assert_eq!(check(&as_owner).outcome, Outcome::Pass);
+
+        // Without a lodger user, the group check reports it; this one does not.
+        let none = root(&[]);
+        assert_eq!(check(&none).outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn tls_checks_the_folders_behind_a_symbolic_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let set = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        // certbot's layout: live/<name>/privkey.pem links to
+        // ../../archive/<name>/privkey1.pem, and archive stays closed.
+        let dir = tempfile::tempdir().unwrap();
+        set(dir.path(), 0o755);
+        let archive = dir.path().join("archive/site");
+        let live = dir.path().join("live/site");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        let real = crate::tls::test_pair::write(&archive, "a", (2031, 1, 1));
+        for path in [&real.cert, &real.key] {
+            set(path, 0o644);
+        }
+        for folder in ["live", "live/site", "archive", "archive/site"] {
+            set(&dir.path().join(folder), 0o755);
+        }
+        let links = TlsFiles {
+            cert: live.join("cert.pem"),
+            key: live.join("privkey.pem"),
+        };
+        std::os::unix::fs::symlink("../../archive/site/a.crt", &links.cert).unwrap();
+        std::os::unix::fs::symlink("../../archive/site/a.key", &links.key).unwrap();
+        let other = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+        let check = || tls_certificate(other.path(), Some(&links), SystemTime::UNIX_EPOCH);
+
+        assert_eq!(check().outcome, Outcome::Pass, "{}", check().reason);
+        set(&dir.path().join("archive"), 0o700);
+        let c = check();
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(c.reason.contains("cannot open the folder"), "{}", c.reason);
+        assert!(c.reason.contains("archive"), "{}", c.reason);
+        set(&dir.path().join("archive"), 0o755);
+        // The folders of the link itself count too.
+        set(&dir.path().join("live"), 0o700);
+        assert_eq!(check().outcome, Outcome::Fail);
+    }
+
+    #[test]
+    fn the_unit_hides_home_root_run_user_and_both_tmp_folders() {
+        let root = Path::new("/");
+        for hidden in [
+            "/home/a/key.pem",
+            "/root/key.pem",
+            "/run/user/1000/key.pem",
+            "/tmp/key.pem",
+            "/var/tmp/x/key.pem",
+        ] {
+            assert!(
+                hidden_by_unit(root, Path::new(hidden)).is_some(),
+                "{hidden}"
+            );
+        }
+        for seen in [
+            "/etc/lodger/tls/key.pem",
+            "/homes/key.pem",
+            "/run/lodger/key.pem",
+            "/tmpfiles/key.pem",
+            "/var/lib/lodger/key.pem",
+        ] {
+            assert!(hidden_by_unit(root, Path::new(seen)).is_none(), "{seen}");
+        }
+    }
+
+    #[test]
+    fn tls_fails_for_a_written_path_in_a_hidden_folder_that_links_out() {
+        use std::os::unix::fs::PermissionsExt;
+        // The pair itself is outside every hidden folder of the test root and
+        // readable by all.
+        let pairs = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(pairs.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let real = crate::tls::test_pair::write(pairs.path(), "a", (2031, 1, 1));
+        for path in [&real.cert, &real.key] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        // The configuration names links in <root>/home/admin/tls, which the
+        // unit hides, even with open folders.
+        let host = root(&[
+            (PASSWD_FILE, "lodger:x:4242:4242::/:/x\n"),
+            (GROUP_FILE, ""),
+        ]);
+        let home = host.path().join("home/admin/tls");
+        std::fs::create_dir_all(&home).unwrap();
+        for folder in ["home", "home/admin", "home/admin/tls"] {
+            std::fs::set_permissions(
+                host.path().join(folder),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        let links = TlsFiles {
+            cert: home.join("cert.pem"),
+            key: home.join("key.pem"),
+        };
+        std::os::unix::fs::symlink(&real.cert, &links.cert).unwrap();
+        std::os::unix::fs::symlink(&real.key, &links.key).unwrap();
+
+        // The real files pass; the links in home do not.
+        assert_eq!(
+            tls_certificate(host.path(), Some(&real), SystemTime::UNIX_EPOCH).outcome,
+            Outcome::Pass
+        );
+        let c = tls_certificate(host.path(), Some(&links), SystemTime::UNIX_EPOCH);
+        assert_eq!(c.outcome, Outcome::Fail, "{}", c.reason);
+        assert!(
+            c.reason.contains("home/admin/tls/cert.pem is below "),
+            "{}",
+            c.reason
+        );
+        assert!(
+            c.reason.contains("which the service cannot see"),
+            "{}",
+            c.reason
+        );
     }
 }
