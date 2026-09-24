@@ -43,6 +43,7 @@ describe('a pool page', () => {
 		show((c) => {
 			c.setQueryData(keys.pools, [listed]);
 			c.setQueryData(keys.pool(listed.uuid), detail);
+			c.setQueryData(keys.volumes(listed.uuid), []);
 		});
 		expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('nas');
 		expect(screen.getByText('Kind').nextElementSibling).toHaveTextContent('NFS share');
@@ -51,6 +52,9 @@ describe('a pool page', () => {
 		expect(screen.getByText('1 TiB used of 4 TiB')).toBeInTheDocument();
 		expect(screen.getByText('On')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+		// A running pool shows its volumes.
+		expect(screen.getByRole('heading', { name: 'Volumes' })).toBeInTheDocument();
+		expect(screen.getByText('nas has no volumes.')).toBeInTheDocument();
 	});
 
 	it('shows a folder pool without sizes while it is stopped', () => {
@@ -69,6 +73,9 @@ describe('a pool page', () => {
 		expect(screen.queryByText(/used of/)).toBeNull();
 		expect(screen.getByText('Off')).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+		// libvirt lists no volumes of a stopped pool.
+		expect(screen.queryByRole('heading', { name: 'Volumes' })).toBeNull();
+		expect(screen.getByText('Start the pool to see and change its volumes.')).toBeInTheDocument();
 	});
 
 	it('says so when libvirt has no pool of that name', () => {

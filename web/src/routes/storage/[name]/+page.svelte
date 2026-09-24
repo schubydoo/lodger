@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { createQuery } from '@tanstack/svelte-query';
 	import PoolManage from '$lib/components/PoolManage.svelte';
+	import PoolVolumes from '$lib/components/PoolVolumes.svelte';
 	import { fetchPool, fetchPools, formatBytes, keys } from '$lib/api';
 
 	const name = $derived(page.params.name ?? '');
@@ -49,4 +50,9 @@
 		<dd>{pool.autostart ? 'On' : 'Off'}</dd>
 	</dl>
 	<PoolManage {pool} />
+	{#if pool.state === 'running'}
+		<PoolVolumes {pool} />
+	{:else}
+		<p class="mt-8 text-sm">Start the pool to see and change its volumes.</p>
+	{/if}
 {/if}
