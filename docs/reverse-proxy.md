@@ -6,7 +6,7 @@ too. If not, Lodger's built-in TLS is simpler: run `sudo lodger install --self-s
 or set `tls_cert` and `tls_key` in `/etc/lodger/config.toml`.
 
 This page covers nginx, Caddy, and Nginx Proxy Manager. The nginx and Caddy files in
-[`docs/proxy/`](proxy/) are the ones that CI tests: `scripts/proxy-smoke.sh` logs in
+[`docs/proxy/`](https://github.com/schubydoo/lodger/tree/main/docs/proxy) are the ones that CI tests: `scripts/proxy-smoke.sh` logs in
 through each proxy, opens the live updates socket, and checks the audit log.
 
 ## What every proxy must do
