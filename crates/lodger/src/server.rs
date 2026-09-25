@@ -155,7 +155,8 @@ async fn web_ui(method: Method, uri: Uri, headers: HeaderMap) -> Response {
 /// cannot be reached does not stop the server: the API reports it as
 /// disconnected. A database that cannot be opened does.
 pub async fn serve(config: Config) -> Result<(), String> {
-    // First, so that a bad certificate stops the start before anything else.
+    config.check_plain_http()?;
+    // Next, so that a bad certificate stops the start before anything else.
     let tls = config
         .tls
         .as_ref()
@@ -194,14 +195,21 @@ pub async fn serve(config: Config) -> Result<(), String> {
         listener.local_addr().map_err(fail)?
     );
     eprintln!("{}", summary(&config));
-    if !listen.ip().is_loopback() && tls.is_none() {
-        // TAD section 7.4: without TLS, passwords and session cookies would
-        // cross the network in clear text. Browsers also keep the Secure
-        // session cookie only over HTTPS or loopback.
+    if config.plain_http_by_opt_in() {
+        // TAD section 7.4: without TLS, passwords and session cookies cross
+        // the network in clear text. Browsers also keep the Secure session
+        // cookie only over HTTPS or loopback.
         eprintln!(
-            "lodger: WARNING: listening on {listen}, which is not loopback, without TLS. Set \
-             tls_cert and tls_key, or put Lodger behind a reverse proxy with TLS and listen on \
-             127.0.0.1 instead."
+            "lodger: WARNING: listening on {listen}, which is not loopback, without TLS, because \
+             allow_plain_http is set. Set tls_cert and tls_key, or put Lodger behind a reverse \
+             proxy with TLS and listen on 127.0.0.1 instead."
+        );
+    } else if !listen.ip().is_loopback() && tls.is_none() {
+        // trusted_proxies allowed the start, but nothing stops another host
+        // from reaching this plain listener directly.
+        eprintln!(
+            "lodger: WARNING: listening on {listen} without TLS. Only the proxies in \
+             trusted_proxies must reach this address."
         );
     }
     // The TCP peer's address, which the login's client-IP rule needs.
