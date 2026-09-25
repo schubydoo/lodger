@@ -1,0 +1,125 @@
+# ClusterFuzzLite: the weekly corpus PRUNE + COVERAGE report (maintenance
+# for cflite_batch, which runs every 2 days). Prune minimizes the persisted corpus (it drops
+# inputs that add no coverage). Coverage replays the whole corpus and writes
+# an HTML line-coverage report, which shows which parser code the fuzzers
+# reach (0% means a target is owed). The corpus repo is private, so GitHub
+# Pages cannot serve its gh-pages branch: the report is also a run artifact. Both reuse the storage-repo + FUZZ_STORAGE_TOKEN. Neither has work
+# to do without the corpus, so a shared `probe` job tests the storage repo
+# first and both jobs skip (green, with a warning) when it does not answer —
+# see cflite_batch.yml for why the probe exists. NOT required checks.
+# Docs: https://google.github.io/clusterfuzzlite/
+name: ClusterFuzzLite cron (prune + coverage)
+
+on:
+  schedule:
+    - cron: "41 5 * * 0" # Sunday 05:41 UTC (offset from the batch + scorecard)
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  # One probe for both jobs below. It runs as its own job so that a corpus
+  # that does not answer shows as two skipped jobs, not as a red run: an
+  # unauthenticated clone raises inside ClusterFuzzLite and reds the job.
+  # git's own error stays in the log for diagnosis; Actions masks the token.
+  probe:
+    name: probe the corpus repo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-probe
+      cancel-in-progress: true
+    outputs:
+      reachable: ${{ steps.corpus.outputs.reachable }}
+    steps:
+      - name: Probe the corpus storage repo
+        id: corpus
+        env:
+          FUZZ_STORAGE_TOKEN: ${{ secrets.FUZZ_STORAGE_TOKEN }}
+        run: |
+          set -uo pipefail
+          reachable=false
+          if [ -z "${FUZZ_STORAGE_TOKEN}" ]; then
+            cause="FUZZ_STORAGE_TOKEN is not set"
+          elif GIT_TERMINAL_PROMPT=0 git ls-remote \
+            "https://x-access-token:${FUZZ_STORAGE_TOKEN}@github.com/schubydoo/lodger-fuzz-corpus.git" \
+            HEAD >/dev/null; then
+            reachable=true
+          else
+            cause="the corpus repo refused the token (git's error is above)"
+          fi
+          if [ "${reachable}" = false ]; then
+            echo "::warning::Prune and coverage are skipped: ${cause}. There is no corpus to work on."
+          fi
+          echo "reachable=${reachable}" >> "${GITHUB_OUTPUT}"
+
+  prune:
+    name: prune corpus
+    needs: probe
+    if: needs.probe.outputs.reachable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      security-events: write
+    concurrency:
+      group: ${{ github.workflow }}-prune
+      cancel-in-progress: true
+    steps:
+      - name: Build fuzzers (address)
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: address
+      - name: Prune the persisted corpus
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: prune
+          sanitizer: address
+          output-sarif: true
+          storage-repo: https://x-access-token:${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/lodger-fuzz-corpus.git
+          storage-repo-branch: main
+
+  coverage:
+    name: coverage report
+    needs: probe
+    if: needs.probe.outputs.reachable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}-coverage
+      cancel-in-progress: true
+    steps:
+      - name: Build fuzzers (coverage)
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: coverage
+      - name: Generate the coverage report
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: coverage
+          sanitizer: coverage
+          storage-repo: https://x-access-token:${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/lodger-fuzz-corpus.git
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
+      # cifuzz writes the report as root with a umask that leaves out "other",
+      # and upload-artifact runs as the runner user, so grant read first.
+      # Download the artifact, unzip it, and open index.html.
+      - name: Make the report readable by the runner
+        shell: bash
+        run: sudo chmod -R a+rX "$GITHUB_WORKSPACE/cifuzz-coverage/report"
+      - name: Upload the coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-coverage-report
+          path: cifuzz-coverage/report
+          if-no-files-found: error

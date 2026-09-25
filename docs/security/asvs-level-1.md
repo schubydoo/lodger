@@ -167,8 +167,8 @@ This section covers ASVS 2.1.1. Lodger checks every input on the server with the
 - Passwords: 15 to 1024 characters, counted as Unicode characters, and not on the
   common list. Lodger has no rule about character types.
 - Setup token: 32 hex characters.
-- Pool path: absolute, at most 4096 bytes, with no `.` or `..` segment, and not a
-  system folder. The NFS host has at most 253 characters from `A-Z`, `a-z`, `0-9`,
+- Pool path and NFS export: absolute, at most 4096 bytes, with no `.` or `..`
+  segment and no control character. A pool path must not be a system folder. The NFS host has at most 253 characters from `A-Z`, `a-z`, `0-9`,
   `.`, `:`, and `-`. Two pools cannot share a path or an NFS export.
 - Network subnet: canonical IPv4 CIDR inside `10.0.0.0/8`, `172.16.0.0/12`, or
   `192.168.0.0/16`, with a prefix of /30 or shorter and no host bits. It must not

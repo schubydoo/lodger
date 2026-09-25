@@ -67,6 +67,8 @@ pub enum InputError {
     PathNotAbsolute { field: &'static str },
     #[error("{field} must not contain . or .. as a folder name")]
     PathDotSegment { field: &'static str },
+    #[error("{field} must not contain a control character")]
+    PathControl { field: &'static str },
     #[error(
         "{field} {path} is a system folder or is inside one. Use a folder of its own, such as /var/lib/libvirt/images"
     )]
@@ -139,6 +141,16 @@ pub fn parse_path(field: &'static str, value: &str) -> Result<String, InputError
     let parts: Vec<&str> = value.split('/').filter(|p| !p.is_empty()).collect();
     if parts.iter().any(|p| matches!(*p, "." | "..")) {
         return Err(InputError::PathDotSegment { field });
+    }
+    // XML 1.0 cannot carry most C0 controls, U+FFFE, or U+FFFF, so a pool with
+    // such a path got XML that libvirt cannot parse (the fuzzer found U+0001).
+    // Tab, newline, DEL, and the C1 controls are legal XML, but no real path
+    // needs them, so every control character is refused.
+    if value
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}'))
+    {
+        return Err(InputError::PathControl { field });
     }
     Ok(format!("/{}", parts.join("/")))
 }
@@ -566,6 +578,20 @@ mod tests {
             parse_path("Path", "/a/../b"),
             Err(InputError::PathDotSegment { field: "Path" })
         );
+        // XML cannot carry a control character or U+FFFE/U+FFFF.
+        for path in [
+            "/\u{1}",
+            "/srv/a\nb",
+            "/srv/\u{7f}",
+            "/srv/\u{FFFE}",
+            "/srv/\u{85}",
+        ] {
+            assert_eq!(
+                parse_path("Path", path),
+                Err(InputError::PathControl { field: "Path" }),
+                "{path:?}"
+            );
+        }
         // A name that only starts with dots is a normal folder name.
         assert_eq!(parse_path("Path", "/a/..b/.c").unwrap(), "/a/..b/.c");
         let long = format!("/{}", "a".repeat(PATH_MAX_LEN));
