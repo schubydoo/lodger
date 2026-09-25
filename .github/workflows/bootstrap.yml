@@ -1,0 +1,71 @@
+name: bootstrap
+
+# Runs scripts/bootstrap.sh in a clean Ubuntu 24.04 container, then starts
+# the server it built on libvirt's test driver (Task 3.8, PRD F14). The job
+# timeout is the promise: a new contributor gets a running dev instance in
+# 15 minutes.
+
+on:
+  schedule:
+    - cron: "23 5 * * 3"
+  pull_request:
+    paths:
+      - scripts/bootstrap.sh
+      - rust-toolchain.toml
+      - .node-version
+      - .github/workflows/bootstrap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck bootstrap.sh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck scripts/bootstrap.sh
+
+  bootstrap:
+    name: bootstrap on a clean Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: "ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3"
+    defaults:
+      run:
+        # A job container runs `sh` by default, which has no pipefail.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bootstrap
+        run: scripts/bootstrap.sh
+      - name: Start the dev server
+        run: |
+          set -euo pipefail
+          target/debug/lodger serve --uri test:///default --state-dir /tmp/lodger-dev \
+            >/tmp/out.log 2>/tmp/err.log &
+          for _ in $(seq 100); do
+            grep -q "^lodger listening on" /tmp/out.log && break
+            sleep 0.1
+          done
+          # /api/health answers 200 while libvirt is down too, so read the body.
+          # The test driver connects in the background after the start.
+          for _ in $(seq 30); do
+            health=$(curl -fsS http://127.0.0.1:8460/api/health)
+            grep -q '"libvirt":"connected"' <<<"$health" && break
+            sleep 1
+          done
+          echo "$health"
+          grep -q '"libvirt":"connected"' <<<"$health"
+          grep -q "setup token" /tmp/err.log

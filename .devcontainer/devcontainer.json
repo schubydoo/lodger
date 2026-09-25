@@ -1,0 +1,24 @@
+{
+  "name": "Lodger",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04@sha256:d94c97dd9cacf183d0a6fd12a8e87b526e9e928307674ae9c94139139c0c6eae",
+  "postCreateCommand": "scripts/bootstrap.sh",
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}"
+  },
+  "forwardPorts": [8460],
+  "portsAttributes": {
+    "8460": {
+      "label": "Lodger",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "svelte.svelte-vscode",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  }
+}
