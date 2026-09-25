@@ -1,7 +1,10 @@
 <!-- Start, stop, autostart, and remove for one pool (PRD F6). Removal lists
      the VMs that have a disk in the pool first, and it needs the pool's name.
-     Deleting the pool's volumes is a separate choice. -->
+     Deleting the pool's volumes is a separate choice. The page's other
+     sections go in `children`, between the buttons and Remove, so Remove
+     stays last. -->
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
@@ -10,27 +13,29 @@
 	import { Input } from '$lib/components/ui/input';
 	import { ApiError, changePool, keys, removePool, type PoolDetail, type Session } from '$lib/api';
 
-	let { pool }: { pool: PoolDetail } = $props();
+	let { pool, children }: { pool: PoolDetail; children?: Snippet } = $props();
 
 	const client = useQueryClient();
 	const csrf = () => client.getQueryData<Session | null>(keys.session)?.csrf_token;
 
 	let busy = $state<'active' | 'autostart' | 'remove' | null>(null);
-	let problem = $state<unknown>(null);
+	// Each error shows next to the control that caused it.
+	let changeProblem = $state<unknown>(null);
+	let removeProblem = $state<unknown>(null);
 	let removing = $state(false);
 	let typed = $state('');
 	let deleteFiles = $state(false);
 
 	const running = $derived(pool.state === 'running');
 
-	function failed(e: unknown) {
+	function failed(e: unknown): unknown {
 		if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
-		problem = e;
+		return e;
 	}
 
 	async function change(what: 'active' | 'autostart') {
 		if (busy) return;
-		problem = null;
+		changeProblem = removeProblem = null;
 		busy = what;
 		try {
 			await changePool(
@@ -39,7 +44,7 @@
 				{ csrf: csrf() }
 			);
 		} catch (e) {
-			failed(e);
+			changeProblem = failed(e);
 		} finally {
 			busy = null;
 		}
@@ -47,14 +52,14 @@
 
 	async function remove() {
 		if (busy || typed !== pool.name) return;
-		problem = null;
+		changeProblem = removeProblem = null;
 		busy = 'remove';
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
 			await client.invalidateQueries({ queryKey: keys.pools });
 			await goto(resolve('/storage'));
 		} catch (e) {
-			failed(e);
+			removeProblem = failed(e);
 		} finally {
 			busy = null;
 		}
@@ -69,6 +74,11 @@
 		{busy === 'autostart' ? 'Saving…' : pool.autostart ? 'Turn autostart off' : 'Turn autostart on'}
 	</Button>
 </div>
+{#if changeProblem !== null}
+	<Problem error={changeProblem} class="mt-3" />
+{/if}
+
+{@render children?.()}
 
 <section aria-labelledby="remove-{pool.uuid}" class="mt-8">
 	<h2 id="remove-{pool.uuid}" class="mb-2 text-lg font-semibold">Remove</h2>
@@ -129,7 +139,7 @@
 			Remove…
 		</Button>
 	{/if}
+	{#if removeProblem !== null}
+		<Problem error={removeProblem} class="mt-3" />
+	{/if}
 </section>
-{#if problem !== null}
-	<Problem error={problem} class="mt-3" />
-{/if}

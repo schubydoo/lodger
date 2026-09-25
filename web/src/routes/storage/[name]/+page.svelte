@@ -49,10 +49,11 @@
 		<dt class="text-muted-foreground">Autostart</dt>
 		<dd>{pool.autostart ? 'On' : 'Off'}</dd>
 	</dl>
-	<PoolManage {pool} />
-	{#if pool.state === 'running'}
-		<PoolVolumes {pool} />
-	{:else}
-		<p class="mt-8 text-sm">Start the pool to see and change its volumes.</p>
-	{/if}
+	<PoolManage {pool}>
+		{#if pool.state === 'running'}
+			<PoolVolumes {pool} />
+		{:else}
+			<p class="mt-8 text-sm">Start the pool to see and change its volumes.</p>
+		{/if}
+	</PoolManage>
 {/if}

@@ -55,6 +55,10 @@ describe('a pool page', () => {
 		// A running pool shows its volumes.
 		expect(screen.getByRole('heading', { name: 'Volumes' })).toBeInTheDocument();
 		expect(screen.getByText('nas has no volumes.')).toBeInTheDocument();
+		// Remove is the last section, below the volumes.
+		const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+		expect(headings.at(-1)).toBe('Remove');
+		expect(headings.indexOf('Volumes')).toBeLessThan(headings.indexOf('Remove'));
 	});
 
 	it('shows a folder pool without sizes while it is stopped', () => {
@@ -75,7 +79,9 @@ describe('a pool page', () => {
 		expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
 		// libvirt lists no volumes of a stopped pool.
 		expect(screen.queryByRole('heading', { name: 'Volumes' })).toBeNull();
-		expect(screen.getByText('Start the pool to see and change its volumes.')).toBeInTheDocument();
+		const note = screen.getByText('Start the pool to see and change its volumes.');
+		const remove = screen.getByRole('heading', { name: 'Remove' });
+		expect(note.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it('says so when libvirt has no pool of that name', () => {
