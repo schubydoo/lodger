@@ -62,7 +62,14 @@ jobs:
           RUSTFLAGS: -Zsanitizer=address
           # One known leak inside libvirt itself. The file explains it.
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/lsan-suppressions.txt
+        # One test at a time. libxml2 2.9 (Ubuntu 24.04, Debian 13) sets up a
+        # global mutex on first use, once under a lock and once without it.
+        # When 2 threads make their first libxml2 call together, both allocate
+        # it, and one 40-byte copy leaks (xmlInitGlobals, fixed in libxml2
+        # 2.11). Each test first opens a libvirt test driver, which parses XML,
+        # so 2 tests in parallel can race there. Each test keeps its own threads.
         run: >-
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
-          -p lodger-virt -- --exact events::tests::stress_ten_thousand_events
+          -p lodger-virt -- --exact --test-threads=1
+          events::tests::stress_ten_thousand_events
           stats::tests::stress_two_thousand_stats_calls
