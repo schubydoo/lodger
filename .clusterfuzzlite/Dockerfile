@@ -3,7 +3,7 @@
 # source and the build script. The fuzz crate depends only on lodger-core,
 # which has no system dependency, so the image needs no libvirt headers.
 # https://google.github.io/clusterfuzzlite/build-integration/rust/
-FROM gcr.io/oss-fuzz-base/base-builder-rust@sha256:4de23732b37444c5bfa324ae9f3f7e51d45a975d609edddaae01a87b10d5f615
+FROM gcr.io/oss-fuzz-base/base-builder-rust@sha256:1fea2c5bb1f452563710429f195f1d9661032866489dbcd9767aa8a1d1238758
 
 COPY . $SRC/lodger
 WORKDIR $SRC/lodger
