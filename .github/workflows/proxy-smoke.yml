@@ -1,0 +1,66 @@
+name: proxy smoke
+
+# Tests the reverse proxy configurations in docs/proxy/ (Task 3.10) with
+# scripts/proxy-smoke.sh: nginx and Caddy, each on the host network in front
+# of Lodger on 127.0.0.1, and on a Docker bridge with Lodger on the gateway
+# address. A client container logs in through the proxy with forged
+# X-Real-IP and X-Forwarded-For headers, and the audit log must show its real
+# address. Every container is unprivileged.
+
+on:
+  pull_request:
+    paths:
+      - docs/proxy/**
+      - scripts/proxy-smoke.sh
+      # The code on the test's path: the client address, the Origin rule, the
+      # configuration, the handlers that write the audit rows, the audit line,
+      # the start lines, and the events socket.
+      - crates/lodger/src/client_ip.rs
+      - crates/lodger/src/security.rs
+      - crates/lodger/src/config.rs
+      - crates/lodger/src/setup.rs
+      - crates/lodger/src/auth.rs
+      - crates/lodger/src/audit.rs
+      - crates/lodger/src/server.rs
+      - crates/lodger/src/ws.rs
+      - .github/workflows/proxy-smoke.yml
+  schedule:
+    # Weekly, so a new proxy or curl image digest cannot break the docs unseen.
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy:
+    name: ${{ matrix.proxy }} on the ${{ matrix.layout }} network
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        proxy: [nginx, caddy]
+        layout: [host, bridge]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: shellcheck scripts/proxy-smoke.sh
+      - name: Install libvirt-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          rustflags: ""
+      - name: Build the server
+        run: cargo build -p lodger
+      - name: Log in through the proxy
+        env:
+          PROXY: ${{ matrix.proxy }}
+          LAYOUT: ${{ matrix.layout }}
+        run: scripts/proxy-smoke.sh "$PROXY" "$LAYOUT"
