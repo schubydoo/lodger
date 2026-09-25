@@ -41,6 +41,8 @@ describe('formatKib', () => {
 	it('keeps one decimal for a fraction', () => {
 		expect(formatKib(1536)).toBe('1.5 MiB');
 		expect(formatKib(65610412)).toBe('62.6 GiB');
+		// The Free column of the dogfood pool: 1,151,656,271,872 bytes.
+		expect(formatKib(1151656271872 / 1024)).toBe('1.0 TiB');
 	});
 });
 

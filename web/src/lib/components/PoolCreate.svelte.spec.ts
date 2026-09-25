@@ -42,6 +42,14 @@ describe('the New pool form', () => {
 		// The list is fresh before the new page reads it.
 		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pools });
 		expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(nav.goto.mock.invocationCallOrder[0]);
+		// The detail is in the cache before the page opens, so the page shows no
+		// loading step (D3).
+		const detail = fetcher.mock.calls.findIndex(([p]) => p === '/api/pools/u1');
+		expect(detail).toBeGreaterThan(0);
+		expect(fetcher.mock.invocationCallOrder[detail]).toBeLessThan(
+			nav.goto.mock.invocationCallOrder[0]
+		);
+		expect(client.getQueryData(keys.pool('u1'))).toBeDefined();
 		const [path, init] = fetcher.mock.calls[0];
 		expect(path).toBe('/api/pools');
 		expect(init?.method).toBe('POST');
@@ -52,6 +60,18 @@ describe('the New pool form', () => {
 			path: '/srv/images2',
 			autostart: true
 		});
+	});
+
+	it('keeps password managers out of its text fields', () => {
+		show();
+		// autocomplete="off" alone does not stop them (D1).
+		for (const label of ['Name', 'Folder']) {
+			const field = screen.getByLabelText(label);
+			expect(field).toHaveAttribute('autocomplete', 'off');
+			expect(field).toHaveAttribute('data-lpignore', 'true');
+			expect(field).toHaveAttribute('data-1p-ignore');
+			expect(field).toHaveAttribute('data-bwignore');
+		}
 	});
 
 	it('creates an NFS pool without a folder, and with autostart off', async () => {

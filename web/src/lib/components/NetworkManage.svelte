@@ -3,6 +3,7 @@
      network's name. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { noAutofill } from '$lib/no-autofill';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import Problem from '$lib/components/Problem.svelte';
@@ -55,8 +56,11 @@
 		busy = 'delete';
 		try {
 			await deleteNetwork(network.uuid, { confirm: typed, csrf: csrf() });
-			await client.invalidateQueries({ queryKey: keys.networks });
+			// Leave first: the page of the deleted network would fetch it again and
+			// get 404. Then drop its cached detail and refresh the list.
 			await goto(resolve('/networks'));
+			client.removeQueries({ queryKey: keys.network(network.uuid) });
+			await client.invalidateQueries({ queryKey: keys.networks });
 		} catch (e) {
 			failed(e);
 		} finally {
@@ -98,7 +102,7 @@
 			<Input
 				id="delete-{network.uuid}-name"
 				class="h-8 w-48"
-				autocomplete="off"
+				{...noAutofill}
 				spellcheck={false}
 				bind:value={typed}
 			/>

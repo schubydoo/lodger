@@ -74,6 +74,7 @@ describe('a pool page', () => {
 
 	it('removes only after the exact name is typed, and keeps the files unless asked', async () => {
 		const { fetcher, client } = show(pool);
+		client.setQueryData(keys.pool(pool.uuid), pool);
 		const refresh = vi.spyOn(client, 'invalidateQueries');
 		await fireEvent.click(button('Remove images'));
 		const remove = button('Remove');
@@ -86,7 +87,11 @@ describe('a pool page', () => {
 		await typeName('images');
 		await fireEvent.click(remove);
 		await waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/storage'));
-		expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pools });
+		await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: keys.pools }));
+		// The page leaves before the refresh, and the removed pool's detail is gone,
+		// so nothing asks for it again (D7).
+		expect(nav.goto.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]);
+		expect(client.getQueryState(keys.pool(pool.uuid))).toBeUndefined();
 		expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE');
 		expect(body(fetcher)).toEqual({ confirm: 'images', delete_files: false });
 	});

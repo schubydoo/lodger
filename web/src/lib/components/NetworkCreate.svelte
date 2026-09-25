@@ -5,6 +5,7 @@
      unless the user turns it off. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { noAutofill } from '$lib/no-autofill';
 	import { resolve } from '$app/paths';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import Problem from '$lib/components/Problem.svelte';
@@ -17,7 +18,8 @@
 		fetchHostBridges,
 		keys,
 		type NewNetwork,
-		type Session
+		type Session,
+		fetchNetwork
 	} from '$lib/api';
 
 	const client = useQueryClient();
@@ -48,11 +50,16 @@
 				? { mode, name: name.trim(), bridge, autostart }
 				: { mode, name: name.trim(), subnet: subnet.trim(), autostart };
 		try {
-			await createNetwork(network, {
+			const { uuid } = await createNetwork(network, {
 				csrf: client.getQueryData<Session | null>(keys.session)?.csrf_token
 			});
-			// The new page finds the network in the list: refresh it first.
+			// The new page finds the network in the list: refresh it first. Fetch the
+			// detail too, so the page opens with its data and shows no loading step.
 			await client.invalidateQueries({ queryKey: keys.networks });
+			await client.prefetchQuery({
+				queryKey: keys.network(uuid),
+				queryFn: () => fetchNetwork(uuid)
+			});
 			await goto(resolve('/networks/[name]', { name: encodeURIComponent(network.name) }));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
@@ -78,7 +85,7 @@
 	</fieldset>
 	<div class="flex flex-col gap-1">
 		<Label for="network-name">Name</Label>
-		<Input id="network-name" autocomplete="off" spellcheck={false} bind:value={name} />
+		<Input id="network-name" {...noAutofill} spellcheck={false} bind:value={name} />
 	</div>
 	{#if mode === 'bridge'}
 		{#if bridges.isPending}
@@ -111,7 +118,7 @@
 			<Input
 				id="network-subnet"
 				placeholder="192.168.150.0/24"
-				autocomplete="off"
+				{...noAutofill}
 				spellcheck={false}
 				bind:value={subnet}
 			/>

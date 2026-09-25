@@ -505,6 +505,8 @@ export function formatKib(kib: number): string {
 		value /= 1024;
 		unit += 1;
 	}
-	const rounded = Number.isInteger(value) ? value : Number(value.toFixed(1));
+	// A fraction keeps its decimal, even ".0": 1.047 TiB shows as "1.0 TiB", not as
+	// "1 TiB", which reads as exact and hides about 50 GiB.
+	const rounded = Number.isInteger(value) ? String(value) : value.toFixed(1);
 	return `${rounded} ${units[unit]}`;
 }

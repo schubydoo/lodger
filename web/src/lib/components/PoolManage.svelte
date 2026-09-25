@@ -5,6 +5,7 @@
      stays last. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { noAutofill } from '$lib/no-autofill';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
@@ -56,8 +57,11 @@
 		busy = 'remove';
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
-			await client.invalidateQueries({ queryKey: keys.pools });
+			// Leave first: the page of the removed pool would fetch it again and get
+			// 404. Then drop its cached detail and refresh the list.
 			await goto(resolve('/storage'));
+			client.removeQueries({ queryKey: keys.pool(pool.uuid) });
+			await client.invalidateQueries({ queryKey: keys.pools });
 		} catch (e) {
 			removeProblem = failed(e);
 		} finally {
@@ -103,7 +107,7 @@
 				<Input
 					id="remove-{pool.uuid}-name"
 					class="h-8 w-48"
-					autocomplete="off"
+					{...noAutofill}
 					spellcheck={false}
 					bind:value={typed}
 				/>

@@ -7,6 +7,7 @@
      so and offers Force off. -->
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import { noAutofill } from '$lib/no-autofill';
 	import Problem from '$lib/components/Problem.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -96,7 +97,7 @@
 		<Input
 			id="force-off-{vm.uuid}"
 			class="h-8 w-40"
-			autocomplete="off"
+			{...noAutofill}
 			spellcheck={false}
 			bind:value={typed}
 		/>

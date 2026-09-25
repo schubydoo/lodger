@@ -1,6 +1,5 @@
 <script lang="ts">
 	import './layout.css';
-	import favicon from '$lib/assets/favicon.svg';
 	import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import { ApiError, keys } from '$lib/api';
@@ -22,8 +21,6 @@
 		})
 	});
 </script>
-
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
 <QueryClientProvider {client}>
 	<AppShell {children} />
