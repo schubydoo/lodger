@@ -1,9 +1,9 @@
 # Lodger task runner. Run `just --list` to see every recipe.
 # Recipes marked "not ready" get their real commands in later tasks.
 
-# Install the toolchains and system packages
+# Install the toolchains and system packages, then build (Debian 13, Ubuntu 24.04)
 setup:
-    @echo "not ready yet: scripts/bootstrap.sh comes later" && exit 1
+    scripts/bootstrap.sh
 
 # Run the backend on the libvirt test driver plus the Vite dev server
 dev:
