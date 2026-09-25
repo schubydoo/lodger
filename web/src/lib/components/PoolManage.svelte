@@ -5,6 +5,7 @@
      stays last. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { vanishing } from '$lib/vanishing.svelte';
 	import { noAutofill } from '$lib/no-autofill';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -55,14 +56,18 @@
 		if (busy || typed !== pool.name) return;
 		changeProblem = removeProblem = null;
 		busy = 'remove';
+		// The page stops fetching the pool: libvirt's event for the removal would
+		// make it ask for the pool again and get 404.
+		vanishing.add(pool.uuid);
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
-			// Leave first: the page of the removed pool would fetch it again and get
-			// 404. Then drop its cached detail and refresh the list.
+			// Leave first, then drop the pool's cached detail and refresh the list.
 			await goto(resolve('/storage'));
 			client.removeQueries({ queryKey: keys.pool(pool.uuid) });
+			vanishing.delete(pool.uuid);
 			await client.invalidateQueries({ queryKey: keys.pools });
 		} catch (e) {
+			vanishing.delete(pool.uuid);
 			removeProblem = failed(e);
 		} finally {
 			busy = null;

@@ -501,7 +501,9 @@ export function formatKib(kib: number): string {
 	const units = ['KiB', 'MiB', 'GiB', 'TiB'];
 	let value = kib;
 	let unit = 0;
-	while (value >= 1024 && unit < units.length - 1) {
+	// Round first, so a value just under the next unit, such as 1023.96 MiB,
+	// shows as "1.0 GiB" and never as "1024.0 MiB".
+	while (Number(value.toFixed(1)) >= 1024 && unit < units.length - 1) {
 		value /= 1024;
 		unit += 1;
 	}

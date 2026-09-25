@@ -43,6 +43,9 @@ describe('formatKib', () => {
 		expect(formatKib(65610412)).toBe('62.6 GiB');
 		// The Free column of the dogfood pool: 1,151,656,271,872 bytes.
 		expect(formatKib(1151656271872 / 1024)).toBe('1.0 TiB');
+		// Just under the next unit rounds up into it.
+		expect(formatKib(1023.96 * 1024)).toBe('1.0 GiB');
+		expect(formatKib(1023.94 * 1024)).toBe('1023.9 MiB');
 	});
 });
 
