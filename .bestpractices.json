@@ -37,7 +37,7 @@
   "version_unique_status": "Met",
   "version_unique_justification": "Each release has a unique version, starting with v0.1.0. Knope computes the next version from the changeset fragments. https://github.com/schubydoo/lodger/releases",
   "version_semver_status": "Met",
-  "version_semver_justification": "Releases use Semantic Versioning, starting with 0.1.0. Until 1.0, a minor version can break the configuration, the API, or the stored data, and the README says so.",
+  "version_semver_justification": "Releases use Semantic Versioning, starting with 0.1.0. Until 1.0, any release can break the configuration, the API, or the stored data, and the README says so.",
   "version_tags_status": "Met",
   "version_tags_justification": "Each release has a v<version> tag, such as v0.1.0, and a ruleset protects the v* tags. https://github.com/schubydoo/lodger/tags",
   "release_notes_status": "Met",

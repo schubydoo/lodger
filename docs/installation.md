@@ -94,15 +94,30 @@ sudo journalctl -u lodger | grep 'setup token'
 Open Lodger in the browser, enter the token, and create the first account. The token
 works once and for 60 minutes. A restart writes a new token until an account exists.
 
+## Recover access
+
+If you forget your password, or you lose every account, use the recovery commands on
+the host. They need root, and they work without the web UI.
+
+```sh
+sudo lodger admin reset-password <username>
+sudo lodger admin create <username>
+```
+
+`reset-password` sets a new password and ends every session of the account. `create`
+adds an account with full rights. In a terminal, each command asks for the new
+password. If standard input is not a terminal, the command reads one line from it. The
+password follows the same rules as in the web UI, and each command writes an audit row.
+
 ## Check the host
 
 ```sh
 sudo lodger doctor
 ```
 
-`lodger doctor` checks the libvirt socket and connection, the `libvirt` group, the
-TLS certificate, snapshot revert, the AppArmor rule for NIC hot-plug, and the SELinux
-boolean for NFS pools. It prints a fix for each problem and changes nothing.
+`lodger doctor` checks the libvirt socket and connection, the `libvirt` group, and the
+TLS certificate. It also checks snapshot revert, the AppArmor rule for NIC hot-plug, and
+the SELinux boolean for NFS pools. It prints a fix for each problem and changes nothing.
 
 ## Uninstall
 
