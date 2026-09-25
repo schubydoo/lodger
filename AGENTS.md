@@ -23,7 +23,9 @@ Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
 
 - Install: `pnpm install --frozen-lockfile`.
 - Gates: `pnpm run lint` (prettier and eslint), `pnpm run check` (svelte-check),
-  `pnpm run test` (vitest), and `pnpm run build`.
+  `pnpm run test` (vitest), and `pnpm run build`. `pnpm run test:e2e` runs the
+  Playwright flows with axe, after `pnpm run build` and `cargo build -p lodger`
+  (details in `web/README.md`).
 - A failed `pnpm run build` leaves the old `web/build/` in place, and a debug build of
   the server serves `web/build/` from disk. Read the exit code of every build.
 

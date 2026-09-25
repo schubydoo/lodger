@@ -293,14 +293,15 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
-    /// Stores a new password hash and ends every session of the account
-    /// except `keep` (ASVS 7.4.3), in one transaction. Returns how many
-    /// sessions ended.
+    /// Stores a new password hash, ends every session of the account
+    /// (ASVS 7.4.3), and stores `new` in place of the `current` one (ASVS
+    /// 7.2.4), in one transaction. Returns how many other sessions ended.
     pub async fn change_password(
         &self,
         account_id: i64,
         password_hash: String,
-        keep: [u8; 32],
+        current: [u8; 32],
+        new: NewSession,
     ) -> Result<usize, String> {
         self.conn
             .call(move |c| {
@@ -314,8 +315,13 @@ impl Db {
                 )?;
                 let ended = tx.execute(
                     "DELETE FROM sessions WHERE account_id = ?1 AND token_sha256 != ?2",
-                    rusqlite::params![account_id, keep.as_slice()],
+                    rusqlite::params![account_id, current.as_slice()],
                 )?;
+                tx.execute(
+                    "DELETE FROM sessions WHERE token_sha256 = ?1",
+                    [current.as_slice()],
+                )?;
+                insert_session(&tx, &new)?;
                 tx.commit()?;
                 Ok(ended)
             })
@@ -435,21 +441,7 @@ impl Db {
                     ),
                     [],
                 )?;
-                c.execute(
-                    &format!(
-                        "INSERT INTO sessions (token_sha256, account_id, csrf_token, created_at,
-                             last_seen_at, expires_at, client_ip, user_agent)
-                         VALUES (?1, ?2, ?3, {NOW}, {NOW},
-                                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+{ABSOLUTE_HOURS} hours'), ?4, ?5)"
-                    ),
-                    rusqlite::params![
-                        new.token_sha256.as_slice(),
-                        new.account_id,
-                        new.csrf_token,
-                        new.client_ip,
-                        new.user_agent
-                    ],
-                )?;
+                insert_session(c, &new)?;
                 Ok(())
             })
             .await
@@ -574,6 +566,25 @@ fn prepare_files(state_dir: &Path, path: &Path) -> Result<(), String> {
         }
         Err(e) => Err(format!("cannot create {}: {e}", path.display())),
     }
+}
+
+/// Inserts a session row. It ends 24 hours after its start at the latest.
+fn insert_session(c: &rusqlite::Connection, new: &NewSession) -> rusqlite::Result<usize> {
+    c.execute(
+        &format!(
+            "INSERT INTO sessions (token_sha256, account_id, csrf_token, created_at,
+                 last_seen_at, expires_at, client_ip, user_agent)
+             VALUES (?1, ?2, ?3, {NOW}, {NOW},
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+{ABSOLUTE_HOURS} hours'), ?4, ?5)"
+        ),
+        rusqlite::params![
+            new.token_sha256.as_slice(),
+            new.account_id,
+            new.csrf_token,
+            new.client_ip,
+            new.user_agent
+        ],
+    )
 }
 
 #[cfg(test)]

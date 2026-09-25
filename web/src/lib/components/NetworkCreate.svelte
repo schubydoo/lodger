@@ -53,7 +53,7 @@
 			});
 			// The new page finds the network in the list: refresh it first.
 			await client.invalidateQueries({ queryKey: keys.networks });
-			await goto(resolve('/networks/[name]', { name: network.name }));
+			await goto(resolve('/networks/[name]', { name: encodeURIComponent(network.name) }));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
 			problem = e;
