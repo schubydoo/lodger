@@ -308,13 +308,14 @@ type Log = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 /// Starts `lodger serve` on `state` and returns the process, the address, and
 /// the setup token from the log, if one was written.
 fn serve_on(state: &std::path::Path) -> (Child, String, Option<String>) {
-    let (child, addr, token, _) = serve_logged(state);
+    let (child, addr, token, _) = serve_logged(state, TEST_URI);
     (child, addr, token)
 }
 
-fn serve_logged(state: &std::path::Path) -> (Child, String, Option<String>, Log) {
+/// Like [`serve_on`], on libvirt `uri`, and with the log lines after the start.
+fn serve_logged(state: &std::path::Path, uri: &str) -> (Child, String, Option<String>, Log) {
     let mut child = lodger()
-        .args(["serve", "--listen", "127.0.0.1:0", "--uri", TEST_URI])
+        .args(["serve", "--listen", "127.0.0.1:0", "--uri", uri])
         .arg("--state-dir")
         .arg(state)
         .stdout(Stdio::piped())
@@ -488,7 +489,7 @@ fn login(addr: &str, username: &str, password: &str) -> Option<String> {
 #[test]
 fn the_sixth_failed_login_waits_and_every_failure_is_logged() {
     let dir = tempfile::tempdir().unwrap();
-    let (child, addr, token, log) = serve_logged(&dir.path().join("state"));
+    let (child, addr, token, log) = serve_logged(&dir.path().join("state"), TEST_URI);
     let mut server = Server {
         child,
         state: tempfile::tempdir().unwrap(),
@@ -716,4 +717,76 @@ fn only_a_non_loopback_address_without_tls_gets_the_clear_text_warning() {
         );
         assert!(log.contains(&format!("trusted proxies, {tls}\n")), "{log}");
     }
+}
+
+/// The number of VMs in the scale test (PRD 5.1, TAD 8.1).
+const SCALE_VMS: usize = 200;
+/// The p95 limit of `GET /api/vms` at that scale.
+const SCALE_P95: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[test]
+fn the_vm_list_answers_200_vms_with_a_p95_under_1_second() {
+    // A test driver file of its own, so no other test adds to these VMs.
+    let dir = tempfile::tempdir().unwrap();
+    let mut node = String::from("<node>");
+    for i in 0..SCALE_VMS {
+        node.push_str(&format!(
+            "<domain type='test'><name>scale-{i:03}</name><memory>65536</memory>\
+             <os><type>hvm</type></os></domain>"
+        ));
+    }
+    node.push_str("</node>");
+    let file = dir.path().join("scale.xml");
+    std::fs::write(&file, node).unwrap();
+    let uri = format!("test://{}", file.display());
+
+    let (child, addr, token, _) = serve_logged(&dir.path().join("state"), &uri);
+    let token = token.expect("a setup token");
+    let mut server = Server {
+        child,
+        state: tempfile::tempdir().unwrap(),
+    };
+    post_setup(&addr, &token, "admin");
+    let cookie = login(&addr, "admin", "correct horse battery staple").expect("a session");
+
+    let count = |body: &str| body.matches("\"name\":\"scale-").count();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while count(&http_get_with(&addr, "/api/vms", &cookie)) < SCALE_VMS {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the inventory did not list {SCALE_VMS} VMs within 10 seconds"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let mut times: Vec<std::time::Duration> = (0..100)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            let body = http_get_with(&addr, "/api/vms", &cookie);
+            let took = start.elapsed();
+            assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+            assert_eq!(count(&body), SCALE_VMS);
+            took
+        })
+        .collect();
+    times.sort();
+    // The 95th of 100 sorted times.
+    let (p50, p95) = (times[49], times[94]);
+    let line = format!(
+        "VM list with {SCALE_VMS} VMs: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms over 100 calls. The p95 limit is {} ms.",
+        p50.as_secs_f64() * 1000.0,
+        p95.as_secs_f64() * 1000.0,
+        times[99].as_secs_f64() * 1000.0,
+        SCALE_P95.as_millis()
+    );
+    println!("{line}");
+    if let Ok(summary) = std::env::var("GITHUB_STEP_SUMMARY") {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(summary)
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+    assert!(p95 < SCALE_P95, "{line}");
+    server.stop();
 }
