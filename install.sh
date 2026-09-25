@@ -5,7 +5,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/schubydoo/lodger/main/install.sh | sudo bash
 #
-# Arguments after `--` go to `lodger install`, for example a self-signed
+# Other arguments go to `lodger install`, for example a self-signed
 # certificate for the LAN:
 #
 #   curl -fsSL .../install.sh | sudo bash -s -- --self-signed 192.168.1.10
@@ -36,7 +36,7 @@ usage() {
 Lodger installer.
 
   (no argument)   download, verify, and install the latest release
-  -- <args>       pass <args> to 'lodger install', e.g. -- --self-signed 192.168.1.10
+  <args>          pass <args> to 'lodger install', e.g. --self-signed 192.168.1.10
   --uninstall     stop and remove the service and the binary (keeps the data)
   --help          show this message
 
@@ -54,9 +54,10 @@ case "${1:-}" in
     have "$TOOL" || die "no ${TOOL} on PATH, so there is nothing to uninstall"
     exec "$TOOL" uninstall
     ;;
+  # `bash -s -- <args>` hands the arguments over without the `--`, so every
+  # other argument goes to `lodger install`. A leading `--` is dropped too.
   --) shift ;;
-  "") : ;;
-  *) die "unknown argument '$1'; use --help, --uninstall, or -- <args for lodger install>" ;;
+  *) : ;;
 esac
 
 # --- platform ----------------------------------------------------------------
@@ -114,13 +115,13 @@ ok "checksum verified"
 
 # The SHA-256 alone does not protect against a tampered mirror: whoever swaps
 # the archive can swap checksums.txt to match. The cosign signature is the real
-# check, and a failed check stops the install. Only a missing cosign, or a
-# release without a signature bundle, falls back to the checksum, with a
-# warning.
+# check, and a failed check stops the install. Every release has a signature
+# bundle, so a missing bundle stops the install too. Only a host without cosign
+# falls back to the checksum, with a warning.
 if ! have cosign; then
   warn "cosign is not installed, so only the SHA-256 was verified. Install cosign for the signature check."
 elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json" 2>/dev/null; then
-  warn "could not fetch the signature bundle (checksums.txt.sigstore.json), so only the SHA-256 was verified."
+  die "could not fetch the signature bundle (checksums.txt.sigstore.json), which every release has; refusing to install a possibly tampered release. Nothing was installed."
 elif ( cd "$tmp" && cosign verify-blob checksums.txt \
         --bundle checksums.txt.sigstore.json \
         --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/knope-release\.yml@" \

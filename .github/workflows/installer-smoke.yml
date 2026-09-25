@@ -57,10 +57,14 @@ jobs:
           # signature can catch this.
           cp -r mirror/archive mirror/sums
           (cd mirror/sums && { sha256sum "$archive"; grep -v " $archive\$" checksums.txt; } >sums.new && mv sums.new checksums.txt)
+          # The same, without the signature bundle: a missing bundle must stop
+          # the install too, not skip the signature check.
+          cp -r mirror/sums mirror/nobundle
+          rm mirror/nobundle/checksums.txt.sigstore.json
       - name: Each tampered mirror stops the install
         run: |
           set -euo pipefail
-          for case in archive sums; do
+          for case in archive sums nobundle; do
             python3 -m http.server 8999 --bind 127.0.0.1 --directory "mirror/$case" >/dev/null 2>&1 &
             server=$!
             sleep 1
@@ -80,7 +84,8 @@ jobs:
           done
           grep -q "checksum verification failed" out-archive.txt
           grep -q "cosign signature verification FAILED" out-sums.txt
-          echo "Both tampered mirrors stopped install.sh before any install." >>"$GITHUB_STEP_SUMMARY"
+          grep -q "could not fetch the signature bundle" out-nobundle.txt
+          echo "All 3 tampered mirrors stopped install.sh before any install." >>"$GITHUB_STEP_SUMMARY"
 
   smoke:
     name: install.sh on ${{ matrix.name }}
@@ -104,8 +109,10 @@ jobs:
             image: "rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f"
             # The image ships curl-minimal, which conflicts with the curl
             # package and already provides the curl command.
+            # libvirt-daemon-kvm brings the storage and network drivers that
+            # Lodger needs, as on a real KVM host.
             setup: >-
-              dnf install -y systemd libvirt-daemon libvirt-daemon-driver-qemu
+              dnf install -y systemd libvirt-daemon libvirt-daemon-kvm
               libvirt-daemon-config-network ca-certificates tar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,8 +151,16 @@ jobs:
         run: |
           set -euo pipefail
           docker exec smoke systemctl is-active lodger
-          docker exec smoke curl -fsS http://127.0.0.1:8460/api/health
-          docker exec smoke lodger doctor || true
+          # /api/health answers 200 while libvirt is down too, so read the body.
+          health=$(docker exec smoke curl -fsS http://127.0.0.1:8460/api/health)
+          echo "$health"
+          grep -q '"libvirt":"connected"' <<<"$health"
+          # doctor also checks the host, and a stock Debian fails its AppArmor
+          # vhost check, which `lodger doctor` itself tells the user to fix. So
+          # the job needs only the checks that the install controls.
+          docker exec smoke lodger doctor | tee doctor.txt || true
+          grep -q "PASS  libvirt connection" doctor.txt
+          grep -q "PASS  libvirt group" doctor.txt
           docker exec smoke sh -c 'lodger version' | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Show the logs on failure
         if: ${{ failure() }}
