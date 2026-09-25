@@ -1158,7 +1158,8 @@ mod tests {
             "new_password": OTHER_PASSWORD,
         });
         let (status, answer, new_tab) = change_password(&addr, &tab, right).await;
-        assert_eq!(status, 200, "{answer}");
+        // No answer in the message: it holds the new CSRF token.
+        assert_eq!(status, 200);
         assert_eq!(answer["ended_sessions"], 1);
         // ASVS 7.2.4: the caller gets a new session, and the old token ends.
         let new_tab = new_tab.expect("the change sets a new cookie");
