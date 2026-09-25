@@ -44,11 +44,15 @@
 		}
 		changing = true;
 		try {
-			const { ended_sessions } = await send<{ ended_sessions: number }>(
-				'POST',
-				'/api/account/password',
-				{ body: { current_password: current, new_password: fresh }, csrf: csrf() }
-			);
+			const { ended_sessions, csrf_token } = await send<{
+				ended_sessions: number;
+				csrf_token: string;
+			}>('POST', '/api/account/password', {
+				body: { current_password: current, new_password: fresh },
+				csrf: csrf()
+			});
+			// The change replaced this session too: keep its new CSRF token.
+			client.setQueryData<Session | null>(keys.session, (s) => s && { ...s, csrf_token });
 			current = fresh = again = '';
 			passwordDone =
 				ended_sessions === 1
