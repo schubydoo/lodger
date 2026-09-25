@@ -60,6 +60,12 @@ describe('the VM list', () => {
 		expect(screen.queryByRole('link', { name: 'Console of beta' })).toBeNull();
 	});
 
+	it('links no console for a running VM without a VNC display', () => {
+		show((c) => c.setQueryData(keys.vms, [{ ...vms[0], has_vnc: false }]));
+		expect(screen.getByRole('link', { name: 'alpha' })).toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: 'Console of alpha' })).toBeNull();
+	});
+
 	it('offers the power actions that fit each VM state', () => {
 		show((c) => c.setQueryData(keys.vms, vms));
 		const [, alpha, beta] = screen.getAllByRole('row');

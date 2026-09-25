@@ -89,7 +89,7 @@
 						<VmActions {vm} />
 					</Table.Cell>
 					<Table.Cell>
-						{#if vm.state === 'running'}
+						{#if vm.state === 'running' && vm.has_vnc}
 							<!-- The label names the VM, and it contains the visible
 							     word, as WCAG 2.5.3 (label in name) asks. -->
 							<a

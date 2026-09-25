@@ -13,6 +13,8 @@ pub struct Vm {
     /// `false` for a transient domain, which disappears when it stops.
     pub persistent: bool,
     pub autostart: bool,
+    /// Whether the domain has a VNC display, which the browser console needs.
+    pub has_vnc: bool,
 }
 
 /// The state of a domain (`virDomainState`).
@@ -81,6 +83,7 @@ mod tests {
             memory_kib: 2_097_152,
             persistent: true,
             autostart: false,
+            has_vnc: true,
         };
         assert_eq!(
             serde_json::to_value(&vm).unwrap(),
@@ -92,6 +95,7 @@ mod tests {
                 "memory_kib": 2_097_152,
                 "persistent": true,
                 "autostart": false,
+                "has_vnc": true,
             })
         );
     }

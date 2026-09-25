@@ -50,7 +50,7 @@
 			<StateBadge state={vm.state} />
 		</div>
 		<div class="flex items-center gap-3">
-			{#if vm.state === 'running'}
+			{#if vm.state === 'running' && vm.has_vnc}
 				<a
 					href={resolve('/vms/[name]/console', { name: encodeURIComponent(vm.name) })}
 					class="rounded-sm text-sm underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
