@@ -109,6 +109,20 @@ describe('a pool page', () => {
 			() => new Response(JSON.stringify({ error: 'the pool is not running' }), { status: 409 })
 		);
 		await fireEvent.click(button('Stop'));
-		expect(await screen.findByRole('alert')).toHaveTextContent('The pool is not running.');
+		const alert = await screen.findByRole('alert');
+		expect(alert).toHaveTextContent('The pool is not running.');
+		// Next to the button, above the Remove section.
+		const remove = screen.getByRole('heading', { name: 'Remove' });
+		expect(alert.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it('shows a failed removal inside the Remove section', async () => {
+		show(pool, () => new Response(JSON.stringify({ error: 'the pool is busy' }), { status: 409 }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove images' }));
+		await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'images' } });
+		await fireEvent.click(button('Remove'));
+		const alert = await screen.findByRole('alert');
+		const section = screen.getByRole('region', { name: 'Remove' });
+		expect(section).toContainElement(alert);
 	});
 });

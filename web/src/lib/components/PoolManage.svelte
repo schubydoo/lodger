@@ -19,21 +19,23 @@
 	const csrf = () => client.getQueryData<Session | null>(keys.session)?.csrf_token;
 
 	let busy = $state<'active' | 'autostart' | 'remove' | null>(null);
-	let problem = $state<unknown>(null);
+	// Each error shows next to the control that caused it.
+	let changeProblem = $state<unknown>(null);
+	let removeProblem = $state<unknown>(null);
 	let removing = $state(false);
 	let typed = $state('');
 	let deleteFiles = $state(false);
 
 	const running = $derived(pool.state === 'running');
 
-	function failed(e: unknown) {
+	function failed(e: unknown): unknown {
 		if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
-		problem = e;
+		return e;
 	}
 
 	async function change(what: 'active' | 'autostart') {
 		if (busy) return;
-		problem = null;
+		changeProblem = removeProblem = null;
 		busy = what;
 		try {
 			await changePool(
@@ -42,7 +44,7 @@
 				{ csrf: csrf() }
 			);
 		} catch (e) {
-			failed(e);
+			changeProblem = failed(e);
 		} finally {
 			busy = null;
 		}
@@ -50,14 +52,14 @@
 
 	async function remove() {
 		if (busy || typed !== pool.name) return;
-		problem = null;
+		changeProblem = removeProblem = null;
 		busy = 'remove';
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
 			await client.invalidateQueries({ queryKey: keys.pools });
 			await goto(resolve('/storage'));
 		} catch (e) {
-			failed(e);
+			removeProblem = failed(e);
 		} finally {
 			busy = null;
 		}
@@ -72,6 +74,9 @@
 		{busy === 'autostart' ? 'Saving…' : pool.autostart ? 'Turn autostart off' : 'Turn autostart on'}
 	</Button>
 </div>
+{#if changeProblem !== null}
+	<Problem error={changeProblem} class="mt-3" />
+{/if}
 
 {@render children?.()}
 
@@ -134,7 +139,7 @@
 			Remove…
 		</Button>
 	{/if}
+	{#if removeProblem !== null}
+		<Problem error={removeProblem} class="mt-3" />
+	{/if}
 </section>
-{#if problem !== null}
-	<Problem error={problem} class="mt-3" />
-{/if}
