@@ -1,7 +1,10 @@
 <!-- Start, stop, autostart, and remove for one pool (PRD F6). Removal lists
      the VMs that have a disk in the pool first, and it needs the pool's name.
-     Deleting the pool's volumes is a separate choice. -->
+     Deleting the pool's volumes is a separate choice. The page's other
+     sections go in `children`, between the buttons and Remove, so Remove
+     stays last. -->
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
@@ -10,7 +13,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { ApiError, changePool, keys, removePool, type PoolDetail, type Session } from '$lib/api';
 
-	let { pool }: { pool: PoolDetail } = $props();
+	let { pool, children }: { pool: PoolDetail; children?: Snippet } = $props();
 
 	const client = useQueryClient();
 	const csrf = () => client.getQueryData<Session | null>(keys.session)?.csrf_token;
@@ -69,6 +72,8 @@
 		{busy === 'autostart' ? 'Saving…' : pool.autostart ? 'Turn autostart off' : 'Turn autostart on'}
 	</Button>
 </div>
+
+{@render children?.()}
 
 <section aria-labelledby="remove-{pool.uuid}" class="mt-8">
 	<h2 id="remove-{pool.uuid}" class="mb-2 text-lg font-semibold">Remove</h2>
