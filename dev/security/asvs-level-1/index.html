@@ -1612,8 +1612,8 @@ v1.0, the new v1.0 features get a new Level 1 review.</p>
 <li>Passwords: 15 to 1024 characters, counted as Unicode characters, and not on the
   common list. Lodger has no rule about character types.</li>
 <li>Setup token: 32 hex characters.</li>
-<li>Pool path: absolute, at most 4096 bytes, with no <code>.</code> or <code>..</code> segment, and not a
-  system folder. The NFS host has at most 253 characters from <code>A-Z</code>, <code>a-z</code>, <code>0-9</code>,
+<li>Pool path and NFS export: absolute, at most 4096 bytes, with no <code>.</code> or <code>..</code>
+  segment and no control character. A pool path must not be a system folder. The NFS host has at most 253 characters from <code>A-Z</code>, <code>a-z</code>, <code>0-9</code>,
   <code>.</code>, <code>:</code>, and <code>-</code>. Two pools cannot share a path or an NFS export.</li>
 <li>Network subnet: canonical IPv4 CIDR inside <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, or
   <code>192.168.0.0/16</code>, with a prefix of /30 or shorter and no host bits. It must not
