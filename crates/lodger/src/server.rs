@@ -204,6 +204,13 @@ pub async fn serve(config: Config) -> Result<(), String> {
              allow_plain_http is set. Set tls_cert and tls_key, or put Lodger behind a reverse \
              proxy with TLS and listen on 127.0.0.1 instead."
         );
+    } else if !listen.ip().is_loopback() && tls.is_none() {
+        // trusted_proxies allowed the start, but nothing stops another host
+        // from reaching this plain listener directly.
+        eprintln!(
+            "lodger: WARNING: listening on {listen} without TLS. Only the proxies in \
+             trusted_proxies must reach this address."
+        );
     }
     // The TCP peer's address, which the login's client-IP rule needs.
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();

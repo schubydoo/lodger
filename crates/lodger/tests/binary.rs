@@ -736,23 +736,25 @@ fn serve_refuses_plain_http_on_the_network_without_the_opt_in() {
 }
 
 #[test]
-fn only_plain_http_by_the_opt_in_gets_the_clear_text_warning() {
+fn plain_http_on_the_network_gets_a_warning_that_fits_its_reason() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key, _) = tls_pair(dir.path());
-    for (extra, warned, summary) in [
+    const OPT_IN: &str = "which is not loopback, without TLS";
+    const PROXY: &str = "Only the proxies in trusted_proxies must reach this address";
+    for (extra, warning, summary) in [
         (
             "allow_plain_http = true\n".to_owned(),
-            true,
+            Some(OPT_IN),
             "0 trusted proxies, TLS off\n".to_owned(),
         ),
         (
             tls_config(&cert, &key),
-            false,
+            None,
             format!("0 trusted proxies, TLS {}\n", cert.display()),
         ),
         (
             "trusted_proxies = [\"172.17.0.0/16\"]\n".to_owned(),
-            false,
+            Some(PROXY),
             "1 trusted proxies, TLS off\n".to_owned(),
         ),
     ] {
@@ -761,11 +763,9 @@ fn only_plain_http_by_the_opt_in_gets_the_clear_text_warning() {
         server.stop();
         let mut log = String::new();
         stderr.read_to_string(&mut log).unwrap();
-        assert_eq!(
-            log.contains("which is not loopback, without TLS"),
-            warned,
-            "{extra}: {log}"
-        );
+        for text in [OPT_IN, PROXY] {
+            assert_eq!(log.contains(text), warning == Some(text), "{extra}: {log}");
+        }
         assert!(log.contains(&summary), "{extra}: {log}");
     }
 }

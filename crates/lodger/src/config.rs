@@ -61,8 +61,9 @@ pub struct Config {
     pub trusted_proxies: Vec<IpNet>,
     /// Built-in TLS, when the file names both a certificate and a key.
     pub tls: Option<TlsFiles>,
-    /// Serve plain HTTP on an address that is not loopback, and accept that
-    /// passwords cross the network in clear text.
+    /// Serve plain HTTP on an address that is not loopback, for a TLS proxy
+    /// that is not in `trusted_proxies`. The session cookie is `Secure`, so a
+    /// browser must still reach Lodger over HTTPS to log in.
     pub allow_plain_http: bool,
 }
 
@@ -156,7 +157,8 @@ impl Config {
             "listen = {} is not loopback, and TLS is off, so passwords would cross the network \
              in clear text. Set tls_cert and tls_key (sudo lodger install --self-signed <ip> \
              makes a pair), or set trusted_proxies for a reverse proxy with TLS, or set \
-             allow_plain_http = true to accept the risk",
+             allow_plain_http = true if a TLS proxy that Lodger does not trust for client \
+             addresses sits in front of it",
             self.listen
         ))
     }
