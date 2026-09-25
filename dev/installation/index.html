@@ -409,6 +409,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#recover-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recover access
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#check-the-host" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -787,6 +798,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#recover-access" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recover access
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#check-the-host" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -920,14 +942,24 @@ to the journal:</p>
 </code></pre></div>
 <p>Open Lodger in the browser, enter the token, and create the first account. The token
 works once and for 60 minutes. A restart writes a new token until an account exists.</p>
-<h2 id="check-the-host">Check the host<a class="headerlink" href="#check-the-host" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>doctor
+<h2 id="recover-access">Recover access<a class="headerlink" href="#recover-access" title="Permanent link">&para;</a></h2>
+<p>If you forget your password, or you lose every account, use the recovery commands on
+the host. They need root, and they work without the web UI.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>admin<span class="w"> </span>reset-password<span class="w"> </span>&lt;username&gt;
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>admin<span class="w"> </span>create<span class="w"> </span>&lt;username&gt;
 </code></pre></div>
-<p><code>lodger doctor</code> checks the libvirt socket and connection, the <code>libvirt</code> group, the
-TLS certificate, snapshot revert, the AppArmor rule for NIC hot-plug, and the SELinux
-boolean for NFS pools. It prints a fix for each problem and changes nothing.</p>
+<p><code>reset-password</code> sets a new password and ends every session of the account. <code>create</code>
+adds an account with full rights. In a terminal, each command asks for the new
+password. If standard input is not a terminal, the command reads one line from it. The
+password follows the same rules as in the web UI, and each command writes an audit row.</p>
+<h2 id="check-the-host">Check the host<a class="headerlink" href="#check-the-host" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>doctor
+</code></pre></div>
+<p><code>lodger doctor</code> checks the libvirt socket and connection, the <code>libvirt</code> group, and the
+TLS certificate. It also checks snapshot revert, the AppArmor rule for NIC hot-plug, and
+the SELinux boolean for NFS pools. It prints a fix for each problem and changes nothing.</p>
 <h2 id="uninstall">Uninstall<a class="headerlink" href="#uninstall" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>uninstall
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>sudo<span class="w"> </span>lodger<span class="w"> </span>uninstall
 </code></pre></div>
 <p>This stops and removes the service and the binary. The configuration, the database,
 and the <code>lodger</code> user stay, unless you add <code>--purge</code>. libvirt keeps every VM, pool,
