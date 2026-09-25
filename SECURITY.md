@@ -38,3 +38,25 @@ too:
 - A WebSocket that opens without a valid ticket.
 - A secret in a log line or in the audit log.
 - A release archive that does not match the signed `checksums.txt` or its provenance.
+
+## Dependencies
+
+CI runs `cargo audit`, `cargo deny`, and `pnpm audit` on every pull request, and
+GitHub reports new advisories through Dependabot alerts. Renovate opens the update
+pull requests. These time frames start when a fixed version of the dependency
+exists:
+
+| Advisory | Time frame |
+| --- | --- |
+| Critical or high, in code that the release binary runs | A fixed release within 7 days |
+| Medium, in code that the release binary runs | A fixed release within 30 days |
+| Low, or any advisory in a build-time or test-only dependency | The next release, and within 90 days |
+
+If no fixed version exists, the maintainer removes the dependency or works around the
+problem within the same time frame. Routine updates without an advisory merge at
+least once a month.
+
+## Security documents
+
+- [Threat model](docs/security/threat-model.md)
+- [ASVS 5.0 Level 1 checklist](docs/security/asvs-level-1.md)
