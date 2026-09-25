@@ -5,6 +5,7 @@
      this list and the pool's sizes. -->
 <script lang="ts">
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { noAutofill } from '$lib/no-autofill';
 	import Problem from '$lib/components/Problem.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -140,7 +141,7 @@
 									<Input
 										id="delete-{volume.name}"
 										class="h-8 w-48"
-										autocomplete="off"
+										{...noAutofill}
 										spellcheck={false}
 										bind:value={typed}
 									/>
@@ -191,7 +192,7 @@
 			<Input
 				id="volume-name"
 				placeholder="disk1.qcow2"
-				autocomplete="off"
+				{...noAutofill}
 				spellcheck={false}
 				bind:value={name}
 			/>

@@ -11,6 +11,9 @@
 		<!-- Scale the root font size with the OS and browser text-size settings (WCAG 1.4.4).
 		     From the Svelte CLI template. See MDN: <meta name="text-scale">. -->
 		<meta name="text-scale" content="scale" />
+		<!-- In the page itself, not added by the app: a browser that finds no icon
+		     link before the app runs asks for /favicon.ico, which does not exist. -->
+		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/favicon.svg" />
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

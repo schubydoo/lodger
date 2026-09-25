@@ -3,6 +3,8 @@
      network's name. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { vanishing } from '$lib/vanishing.svelte';
+	import { noAutofill } from '$lib/no-autofill';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import Problem from '$lib/components/Problem.svelte';
@@ -53,11 +55,18 @@
 		if (busy || typed !== network.name) return;
 		problem = null;
 		busy = 'delete';
+		// The page stops fetching the network: libvirt's event for the delete
+		// would make it ask for the network again and get 404.
+		vanishing.add(network.uuid);
 		try {
 			await deleteNetwork(network.uuid, { confirm: typed, csrf: csrf() });
-			await client.invalidateQueries({ queryKey: keys.networks });
+			// Leave first, then drop the network's cached detail and refresh the list.
 			await goto(resolve('/networks'));
+			client.removeQueries({ queryKey: keys.network(network.uuid) });
+			vanishing.delete(network.uuid);
+			await client.invalidateQueries({ queryKey: keys.networks });
 		} catch (e) {
+			vanishing.delete(network.uuid);
 			failed(e);
 		} finally {
 			busy = null;
@@ -98,7 +107,7 @@
 			<Input
 				id="delete-{network.uuid}-name"
 				class="h-8 w-48"
-				autocomplete="off"
+				{...noAutofill}
 				spellcheck={false}
 				bind:value={typed}
 			/>

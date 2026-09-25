@@ -1,9 +1,11 @@
+import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Page from './+page.svelte';
 import QueryHarness from '$lib/test/QueryHarness.svelte';
 import { testClient } from '$lib/test/fixtures';
 import { keys, type Pool, type PoolDetail } from '$lib/api';
+import { vanishing } from '$lib/vanishing.svelte';
 
 const params = vi.hoisted(() => ({ name: 'nas' }));
 vi.mock('$app/state', () => ({ page: { params } }));
@@ -31,7 +33,7 @@ const detail: PoolDetail = {
 function show(setup: (client: ReturnType<typeof testClient>) => void) {
 	const client = testClient();
 	setup(client);
-	return render(QueryHarness, { props: { client, component: Page, props: {} } });
+	return { client, ...render(QueryHarness, { props: { client, component: Page, props: {} } }) };
 }
 
 beforeEach(() => {
@@ -82,6 +84,28 @@ describe('a pool page', () => {
 		const note = screen.getByText('Start the pool to see and change its volumes.');
 		const remove = screen.getByRole('heading', { name: 'Remove' });
 		expect(note.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it('stops fetching a pool that a delete is removing', async () => {
+		const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(detail)));
+		vi.stubGlobal('fetch', fetcher);
+		const { client } = show((c) => {
+			c.setQueryData(keys.pools, [listed]);
+			c.setQueryData(keys.pool(listed.uuid), detail);
+			c.setQueryData(keys.volumes(listed.uuid), []);
+		});
+		vanishing.add(listed.uuid);
+		// The delete request runs next, so the page's effect applies the mark
+		// before libvirt's event can arrive.
+		await tick();
+		// What the events socket does for libvirt's event about the removal (D7).
+		await client.invalidateQueries({ queryKey: keys.pool(listed.uuid) });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		vanishing.delete(listed.uuid);
+		vi.unstubAllGlobals();
+		expect(fetcher.mock.calls.map(([path]) => path)).not.toContain(`/api/pools/${listed.uuid}`);
+		// The page keeps what it showed.
+		expect(screen.getByText('nas.lan:/volume1/vm')).toBeInTheDocument();
 	});
 
 	it('says so when libvirt has no pool of that name', () => {

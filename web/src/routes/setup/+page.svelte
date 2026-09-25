@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import { noAutofill } from '$lib/no-autofill';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -60,7 +61,7 @@
 		<form class="grid gap-4" onsubmit={claim}>
 			<div class="grid gap-2">
 				<Label for="token">Setup token</Label>
-				<Input id="token" autocomplete="off" spellcheck={false} required bind:value={token} />
+				<Input id="token" {...noAutofill} spellcheck={false} required bind:value={token} />
 			</div>
 			<div class="grid gap-2">
 				<Label for="username">Username</Label>
