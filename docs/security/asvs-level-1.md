@@ -9,9 +9,8 @@ Each requirement has one verdict:
 - Pass: the code meets the requirement. The evidence names the code and the test that
   proves it.
 - N/A: Lodger has no such feature. The evidence says why.
-- Open: the code does not meet the requirement yet. The evidence says what is missing.
 
-The totals: 55 pass, 14 N/A, and 1 open.
+The totals: 56 pass and 14 N/A.
 
 A pull request that adds an endpoint or a new input updates this checklist. Before
 v1.0, the new v1.0 features get a new Level 1 review.
@@ -34,7 +33,7 @@ v1.0, the new v1.0 features get a new Level 1 review.
 | ID | Verdict | Evidence |
 | --- | --- | --- |
 | 2.1.1 | Pass | The section [Input rules](#input-rules) below. |
-| 2.2.1 | Pass | `crates/lodger-core/src/validate.rs` checks names, paths, hosts, bridges, and subnets against allowlists and limits. Formats and modes are enums, and every JSON body refuses unknown fields. |
+| 2.2.1 | Pass | `crates/lodger-core/src/validate.rs` checks names, paths, hosts, bridges, and subnets against allowlists and limits. Formats and modes are enums. The create and change bodies of pools, networks, volumes, and VMs refuse unknown fields. |
 | 2.2.2 | Pass | Each handler checks its input on the server before it acts. The web app checks only for empty fields. |
 | 2.3.1 | Pass | Setup runs in a fixed order. Setup must be open, the token must be live and correct, and the name and password must be valid. Then one transaction adds the account. If any account exists, the transaction fails. Tests: `parallel_claims_create_exactly_one_account`, `closed_setup_answers_404_whatever_the_body`. |
 
@@ -132,7 +131,7 @@ v1.0, the new v1.0 features get a new Level 1 review.
 | ID | Verdict | Evidence |
 | --- | --- | --- |
 | 12.1.1 | Pass | rustls allows only TLS 1.2 and TLS 1.3, and it prefers TLS 1.3. |
-| 12.2.1 | Open | If TLS is set, Lodger serves only HTTPS and never falls back. But Lodger still starts on a non-loopback address without TLS, and it only logs a warning. A password then crosses the LAN in clear text. |
+| 12.2.1 | Pass | If TLS is set, Lodger serves only HTTPS and never falls back. Without TLS, Lodger refuses to start on an address that is not loopback, unless `trusted_proxies` names a reverse proxy with TLS. The operator can accept plain HTTP with `allow_plain_http = true`. That host then does not meet 12.2.1, and Lodger logs a warning at every start. Tests: `serve_refuses_plain_http_on_the_network_without_the_opt_in`, `only_plain_http_by_the_opt_in_gets_the_clear_text_warning`. |
 | 12.2.2 | N/A | Lodger is a LAN admin UI, not an external service. If you expose Lodger to the internet, use a publicly trusted certificate. |
 
 ## V13 Configuration
@@ -178,8 +177,8 @@ This section covers ASVS 2.1.1. Lodger checks every input on the server with the
 - Volume: format `qcow2` or `raw`, and a size from 1 MiB to 1 PiB. The name must be
   new in the pool.
 - VM actions: a fixed list. Force off and delete need the VM name typed again.
-- Bodies: JSON only, and every object refuses unknown fields. The limit is axum's
-  default of 2 MB.
+- Bodies: JSON only, with a limit of 2 MB, which is axum's default. The create and
+  change bodies of pools, networks, volumes, and VMs refuse unknown fields.
 - Headers: Lodger stores at most 256 characters of `User-Agent`. It reads `X-Real-IP`
   and `X-Forwarded-For` only from an address in `trusted_proxies`.
 
