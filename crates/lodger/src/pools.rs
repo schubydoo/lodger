@@ -40,6 +40,14 @@ const NOT_FOUND: NotFound = NotFound {
 /// Where Lodger mounts an NFS pool when the request names no folder.
 const NFS_MOUNT_ROOT: &str = "/var/lib/libvirt/pools";
 
+/// Whether pool `name` is an NFS pool that mounts on its own folder in
+/// Lodger's mount root, the folder that Lodger picks when the request names
+/// none. Only such a folder may go when the pool goes.
+fn in_lodger_mount_root(xml: &PoolXml, name: &str) -> bool {
+    xml.pool_type() == Some("netfs")
+        && xml.target_path() == Some(format!("{NFS_MOUNT_ROOT}/{name}").as_str())
+}
+
 /// A pool with the facts that its XML and the VMs add.
 #[derive(Debug, Serialize)]
 pub struct PoolDetail {
@@ -350,11 +358,54 @@ pub async fn remove(
         row,
         "pool.deleted",
         Some(action),
-        async { virt.remove_pool(id, request.delete_files).await },
+        async {
+            // An NFS pool in Lodger's own mount folder would leave that empty
+            // folder behind. A folder that the user named always stays.
+            let lodger_folder = PoolXml::parse(&virt.pool_xml(id).await?)
+                .is_ok_and(|xml| in_lodger_mount_root(&xml, &pool.name));
+            virt.remove_pool(id, request.delete_files, lodger_folder)
+                .await
+        },
     )
     .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => *response,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lodger_core::xml::pool::PoolXml;
+
+    use super::in_lodger_mount_root;
+
+    fn pool(kind: &str, path: &str) -> PoolXml {
+        PoolXml::parse(&format!(
+            "<pool type='{kind}'><name>nas</name><target><path>{path}</path></target></pool>"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_an_nfs_pool_in_its_own_folder_of_the_mount_root_counts() {
+        assert!(in_lodger_mount_root(
+            &pool("netfs", "/var/lib/libvirt/pools/nas"),
+            "nas"
+        ));
+        // A folder that the user named stays, and so does every directory pool.
+        assert!(!in_lodger_mount_root(&pool("netfs", "/mnt/nas"), "nas"));
+        assert!(!in_lodger_mount_root(
+            &pool("netfs", "/var/lib/libvirt/pools/other"),
+            "nas"
+        ));
+        assert!(!in_lodger_mount_root(
+            &pool("netfs", "/var/lib/libvirt/pools"),
+            "nas"
+        ));
+        assert!(!in_lodger_mount_root(
+            &pool("dir", "/var/lib/libvirt/pools/nas"),
+            "nas"
+        ));
     }
 }

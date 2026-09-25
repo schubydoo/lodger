@@ -294,7 +294,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.is_not_found(), "{err}");
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -319,7 +319,7 @@ mod tests {
             .map(|v| v.name)
             .collect();
         assert_eq!(names, ["aa.img", "same.img", "zz.img"]);
-        virt.remove_pool(id, true).await.unwrap();
+        virt.remove_pool(id, true, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -346,7 +346,7 @@ mod tests {
 
         undefine(&virt, "vol-used-vm").await;
         virt.delete_volume(id, "root.qcow2".into()).await.unwrap();
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -370,7 +370,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.to_string(), "in use by vol-iso-vm");
         undefine(&virt, "vol-iso-vm").await;
-        virt.remove_pool(id, true).await.unwrap();
+        virt.remove_pool(id, true, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -399,7 +399,7 @@ mod tests {
         // The overlay itself has no users, so it goes, and then the base.
         virt.delete_volume(id, "web.qcow2".into()).await.unwrap();
         virt.delete_volume(id, "base.qcow2".into()).await.unwrap();
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -414,7 +414,7 @@ mod tests {
         let mut names = virt.volume_names(id).await.unwrap();
         names.sort();
         assert_eq!(names, ["a.img", "b.img"]);
-        virt.remove_pool(id, true).await.unwrap();
+        virt.remove_pool(id, true, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -434,7 +434,7 @@ mod tests {
             // Lodger's own words, not libvirt's "storage pool is not active".
             assert_eq!(err.to_string(), "the pool is not running");
         }
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[test]

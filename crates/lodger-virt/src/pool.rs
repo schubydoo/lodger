@@ -83,11 +83,27 @@ impl Virt {
 
     /// Removes pool `id`: stops it and undefines it. With `delete_files`, it
     /// first deletes every volume in the pool, and then the pool's folder or
-    /// NFS mount folder. A transient pool is gone after the stop, so its
-    /// folder stays.
-    pub async fn remove_pool(&self, id: Uuid, delete_files: bool) -> Result<(), Error> {
-        self.job(move |c| remove_pool_on(c, id, delete_files, |v| v.delete(0), |_| {}))
-            .await
+    /// NFS mount folder. With `remove_empty_folder` alone, it removes the
+    /// folder only if it is empty: libvirt deletes a stopped file-system pool's
+    /// folder with rmdir, which keeps a folder that holds anything. A
+    /// transient pool is gone after the stop, so its folder stays.
+    pub async fn remove_pool(
+        &self,
+        id: Uuid,
+        delete_files: bool,
+        remove_empty_folder: bool,
+    ) -> Result<(), Error> {
+        self.job(move |c| {
+            remove_pool_on(
+                c,
+                id,
+                delete_files,
+                remove_empty_folder,
+                |v| v.delete(0),
+                |_| {},
+            )
+        })
+        .await
     }
 }
 
@@ -115,6 +131,7 @@ fn remove_pool_on(
     c: &Connect,
     id: Uuid,
     delete_files: bool,
+    remove_empty_folder: bool,
     delete_volume: impl Fn(&StorageVol) -> Result<(), virt::error::Error>,
     before_stop: impl FnOnce(&StoragePool),
 ) -> Result<(), virt::error::Error> {
@@ -149,6 +166,10 @@ fn remove_pool_on(
     if persistent {
         if delete_files {
             pool.delete(0)?;
+        } else if remove_empty_folder {
+            // Best effort: a folder that holds anything, or that is gone
+            // already, stays as it is, and the removal goes on.
+            let _ = pool.delete(0);
         }
         pool.undefine()?;
     }
@@ -276,7 +297,7 @@ mod tests {
         let err = virt.set_pool_active(id, false).await.unwrap_err();
         assert!(err.is_invalid_operation(), "{err}");
         virt.set_pool_active(id, true).await.unwrap();
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
         assert!(!exists(&virt, "pool-life").await);
     }
 
@@ -297,7 +318,7 @@ mod tests {
         })
         .await
         .expect("no autostart event within 5 seconds");
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -336,7 +357,7 @@ mod tests {
             Some(true),
             "autostart was off when the pool started"
         );
-        virt.remove_pool(seen.0, false).await.unwrap();
+        virt.remove_pool(seen.0, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -357,14 +378,14 @@ mod tests {
                     let pool = c.lookup_storage_pool_by_uuid(Uuid::nil());
                     pool.map(drop)
                 };
-                Ok(super::remove_pool_on(c, id, true, busy, |_| {}))
+                Ok(super::remove_pool_on(c, id, true, false, busy, |_| {}))
             })
             .await
             .unwrap();
         assert!(result.is_err());
         // Still defined, and stopped as before.
         assert_eq!(state(&virt, id).await, (false, true));
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -404,7 +425,7 @@ mod tests {
             virt.pool_users(id).await.unwrap(),
             ["pool-users-a", "pool-users-b"]
         );
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 
     #[tokio::test]
@@ -429,7 +450,7 @@ mod tests {
                 let look = |p: &virt::storage_pool::StoragePool| {
                     left = Some(p.list_all_volumes(0).unwrap().len());
                 };
-                super::remove_pool_on(c, id, true, |v| v.delete(0), look)?;
+                super::remove_pool_on(c, id, true, false, |v| v.delete(0), look)?;
                 Ok(left)
             })
             .await
@@ -465,7 +486,18 @@ mod tests {
             .unwrap();
         assert!(names.contains(&"pool-kept".to_owned()), "{names:?}");
         assert!(!names.contains(&"pool-gone".to_owned()), "{names:?}");
-        virt.remove_pool(kept, false).await.unwrap();
+        virt.remove_pool(kept, false, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn removing_the_empty_folder_still_undefines_the_pool() {
+        let virt = Virt::open(TEST_URI).await.unwrap();
+        let id = virt
+            .create_pool(dir_xml("pool-empty-folder"), true)
+            .await
+            .unwrap();
+        virt.remove_pool(id, false, true).await.unwrap();
+        assert!(!exists(&virt, "pool-empty-folder").await);
     }
 
     #[tokio::test]
@@ -476,7 +508,7 @@ mod tests {
             .job(move |c| c.create_storage_pool_xml(&xml, 0)?.uuid())
             .await
             .unwrap();
-        virt.remove_pool(id, true).await.unwrap();
+        virt.remove_pool(id, true, false).await.unwrap();
         assert!(!exists(&virt, "pool-transient").await);
     }
 
@@ -488,6 +520,6 @@ mod tests {
         let (_, xml) = all.iter().find(|(n, _)| n == "pool-list").unwrap();
         assert!(xml.contains("<path>/srv/pool-list</path>"), "{xml}");
         assert_eq!(&virt.pool_xml(id).await.unwrap(), xml);
-        virt.remove_pool(id, false).await.unwrap();
+        virt.remove_pool(id, false, false).await.unwrap();
     }
 }
