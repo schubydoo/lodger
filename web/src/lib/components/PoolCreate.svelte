@@ -51,7 +51,7 @@
 			});
 			// The new page finds the pool in the list: refresh it first.
 			await client.invalidateQueries({ queryKey: keys.pools });
-			await goto(resolve('/storage/[name]', { name: pool.name }));
+			await goto(resolve('/storage/[name]', { name: encodeURIComponent(pool.name) }));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
 			problem = e;

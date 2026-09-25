@@ -50,7 +50,7 @@ describe('the account page', () => {
 	});
 
 	it('changes the password with the current one and says how many sessions ended', async () => {
-		const { fetcher } = show(() => json({ ended_sessions: 2 }));
+		const { fetcher, client } = show(() => json({ ended_sessions: 2, csrf_token: 'csrf2' }));
 		await type('Current password', 'the old passphrase');
 		await type('New password', 'a new long passphrase');
 		await type('New password again', 'a new long passphrase');
@@ -65,6 +65,8 @@ describe('the account page', () => {
 			current_password: 'the old passphrase',
 			new_password: 'a new long passphrase'
 		});
+		// The server replaced the session, so the next change needs the new token.
+		expect(client.getQueryData(keys.session)).toEqual({ username: 'admin', csrf_token: 'csrf2' });
 	});
 
 	it('shows a clear message for a common password', async () => {
