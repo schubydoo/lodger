@@ -151,7 +151,7 @@ v1.0, the new v1.0 features get a new Level 1 review.
 
 | ID | Verdict | Evidence |
 | --- | --- | --- |
-| 15.1.1 | Pass | [SECURITY.md](../../SECURITY.md) gives the time frames for dependency fixes and updates. |
+| 15.1.1 | Pass | [SECURITY.md](https://github.com/schubydoo/lodger/blob/main/SECURITY.md) gives the time frames for dependency fixes and updates. |
 | 15.2.1 | Pass | On 2026-09-24, `cargo audit` and `cargo deny` report no advisory. `pnpm audit` reports 1 low advisory in `cookie`, a build-time dependency of SvelteKit, which is inside its time frame. |
 | 15.3.1 | Pass | No answer holds a password hash or a session token. Account answers hold only the ID and the name. No endpoint lists sessions. |
 

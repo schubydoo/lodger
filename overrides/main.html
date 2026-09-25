@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{# Version-warning banner. Material (via extra.version.provider: mike) renders it
+   on any version that is not the `latest` alias: the rolling `dev` build from
+   main, or an older release. #}
+{% block outdated %}
+  You are reading the docs of an unreleased or older version of Lodger.
+  <a href="{{ '../' ~ base_url }}"><strong>Go to the latest release</strong></a>
+{% endblock %}
