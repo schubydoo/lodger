@@ -128,4 +128,9 @@ jobs:
             # never touches `latest`/default, so unreleased changes are not what
             # users see by default; the version-warning banner flags `dev`.
             mike deploy --push --update-aliases dev
+            # Until a release creates `latest`, the site root points at `dev`,
+            # so the root URL and the banner's link do not answer 404.
+            if ! mike list --json | python3 -c 'import json, sys; sys.exit(0 if any("latest" in v["aliases"] for v in json.load(sys.stdin)) else 1)'; then
+              mike set-default --push dev
+            fi
           fi

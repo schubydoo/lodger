@@ -37,4 +37,4 @@ sudo journalctl -u lodger -n 20
 
 | Release | Change | What to do |
 | --- | --- | --- |
-| v0.2 | Lodger refuses to start on an address that is not loopback without TLS. | Set `tls_cert` and `tls_key`, or list your reverse proxy in `trusted_proxies`, before the upgrade. The [installation page](installation.md#reach-lodger-from-the-lan) gives the choices. |
+| v0.2 | Lodger refuses to start on an address that is not loopback without TLS. Until you fix it, the upgrade stops with "cannot install, and nothing changed". | Before the upgrade, do one of these: set `tls_cert` and `tls_key` ([installation](installation.md#reach-lodger-from-the-lan)), list your reverse proxy in `trusted_proxies` ([reverse proxy](reverse-proxy.md#lodgers-configuration)), or set `allow_plain_http = true` for a TLS proxy that Lodger does not trust for client addresses. |

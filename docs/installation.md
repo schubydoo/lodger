@@ -49,11 +49,14 @@ itself. Choose one of these ways:
     `sudo systemctl restart lodger`.
 
 - Built-in TLS with your own certificate. Set `tls_cert` and `tls_key` in
-  `/etc/lodger/config.toml`. The `lodger` user must be able to read both files.
+  `/etc/lodger/config.toml`. The `lodger` user must be able to read both files. Set
+  `listen` to the host's LAN address too, as above, and run
+  `sudo systemctl restart lodger`.
 - A [reverse proxy](reverse-proxy.md) that already serves your other sites.
 
-Lodger refuses to start on an address that is not loopback without TLS. Without TLS,
-a password crosses the network in clear text.
+Without TLS, Lodger refuses to start on an address that is not loopback, unless
+`trusted_proxies` or `allow_plain_http = true` is set. Then it logs a warning at each
+start, and a password crosses the network in clear text to any host that reaches it.
 
 ## Install by hand
 
