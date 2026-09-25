@@ -27,7 +27,8 @@ command -v apt-get >/dev/null \
 
 info "installing the system packages…"
 $sudo apt-get update -qq
-DEBIAN_FRONTEND=noninteractive $sudo apt-get install -y -qq --no-install-recommends \
+# env passes the variable through sudo, which drops it otherwise.
+$sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
   build-essential pkg-config libvirt-dev rustup just git curl ca-certificates xz-utils >/dev/null
 
 info "installing the Rust toolchain of rust-toolchain.toml…"

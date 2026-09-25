@@ -8,8 +8,8 @@ part lives.
 
 - libvirt is the source of truth for VMs, pools, volumes, networks, and snapshots.
   Lodger reads them from libvirt and keeps a cache, never a copy in its database.
-- SQLite holds only what libvirt does not know: accounts, sessions, the audit log,
-  and UI configuration.
+- SQLite holds only what libvirt does not know: accounts, sessions, recovery codes,
+  the audit log, and UI configuration.
 - Remove the binary, the service, and the state folder, and every VM keeps working
   with `virsh`.
 
@@ -67,7 +67,9 @@ job runs their stress tests under AddressSanitizer.
 | `client_ip.rs` | The client address, which Lodger reads from a trusted proxy only |
 | `tickets.rs`, `ws.rs` | The single-use WebSocket tickets and the events socket |
 | `console.rs` | The VNC console relay |
-| `accounts.rs`, `actions.rs`, `pools.rs`, `volumes.rs`, `networks.rs`, `stats.rs` | The API handlers |
+| `api.rs` | The host and VM reads, which come from the inventory cache |
+| `accounts.rs`, `actions.rs`, `pools.rs`, `volumes.rs`, `networks.rs`, `stats.rs` | The other API handlers |
+| `passwords.rs` | argon2id password hashes, with a limit on how many run at once |
 | `db/` | SQLite, its migrations, and its queries |
 | `audit.rs` | The audit log, with a copy in the journal |
 | `install.rs`, `doctor.rs`, `admin.rs` | `lodger install`, `lodger doctor`, and the root-only recovery commands |

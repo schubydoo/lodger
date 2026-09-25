@@ -59,5 +59,13 @@ jobs:
             grep -q "^lodger listening on" /tmp/out.log && break
             sleep 0.1
           done
-          curl -fsS http://127.0.0.1:8460/api/health
+          # /api/health answers 200 while libvirt is down too, so read the body.
+          # The test driver connects in the background after the start.
+          for _ in $(seq 30); do
+            health=$(curl -fsS http://127.0.0.1:8460/api/health)
+            grep -q '"libvirt":"connected"' <<<"$health" && break
+            sleep 1
+          done
+          echo "$health"
+          grep -q '"libvirt":"connected"' <<<"$health"
           grep -q "setup token" /tmp/err.log

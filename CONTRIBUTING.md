@@ -55,7 +55,7 @@ The browser tests need a built web app and a debug server. The details are in
 ## Rules for the code
 
 - libvirt is the source of truth for VMs, pools, networks, and snapshots. SQLite
-  holds only accounts, sessions, the audit log, and UI configuration.
+  holds only accounts, sessions, recovery codes, the audit log, and UI configuration.
 - Only the `lodger-virt` crate imports `virt`. Lodger calls libvirt through the
   Rust bindings, never through `virsh`, `qemu-img`, or a shell.
 - `unsafe` code lives only in `crates/lodger-virt/src/events/ffi.rs` and
