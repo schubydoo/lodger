@@ -1,0 +1,40 @@
+# cargo-fuzz harnesses for lodger-core's XML parsers, XML builders, and input
+# checks (Task 3.13). This is its own workspace (the `[workspace]` table below
+# detaches it from the root), so `cargo build --workspace`, the tests, and the
+# coverage job never build it. Only ClusterFuzzLite and `cargo +nightly fuzz`
+# do. It needs no libvirt: lodger-core has no system dependency.
+[package]
+name = "lodger-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lodger-core = { path = "../crates/lodger-core" }
+
+[[bin]]
+name = "libvirt_xml"
+path = "fuzz_targets/libvirt_xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xml_builders"
+path = "fuzz_targets/xml_builders.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_checks"
+path = "fuzz_targets/input_checks.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

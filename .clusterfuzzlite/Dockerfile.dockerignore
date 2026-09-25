@@ -1,0 +1,9 @@
+# The ignore file for the ClusterFuzzLite build context. It keeps the Rust
+# source and leaves out what cargo-fuzz does not need. rust-toolchain.toml is
+# left out on purpose: its pinned stable channel would override the base
+# image's nightly and break `cargo fuzz build`.
+.git
+target
+fuzz/target
+web
+rust-toolchain.toml
