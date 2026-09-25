@@ -5,6 +5,7 @@
      shows what happened to each disk. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { noAutofill } from '$lib/no-autofill';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import Problem from '$lib/components/Problem.svelte';
@@ -102,7 +103,7 @@
 				<Input
 					id="delete-{vm.uuid}"
 					class="h-8 w-40"
-					autocomplete="off"
+					{...noAutofill}
 					spellcheck={false}
 					bind:value={typed}
 				/>

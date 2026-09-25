@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { vanishing } from '$lib/vanishing.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import PoolManage from '$lib/components/PoolManage.svelte';
 	import PoolVolumes from '$lib/components/PoolVolumes.svelte';
@@ -12,7 +13,7 @@
 	const detail = createQuery(() => ({
 		queryKey: keys.pool(listed?.uuid ?? ''),
 		queryFn: () => fetchPool(listed!.uuid),
-		enabled: listed !== undefined
+		enabled: listed !== undefined && !vanishing.has(listed.uuid)
 	}));
 </script>
 

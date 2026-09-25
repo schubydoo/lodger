@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { vanishing } from '$lib/vanishing.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import NetworkManage from '$lib/components/NetworkManage.svelte';
 	import { fetchNetwork, fetchNetworks, keys } from '$lib/api';
@@ -11,7 +12,7 @@
 	const detail = createQuery(() => ({
 		queryKey: keys.network(listed?.uuid ?? ''),
 		queryFn: () => fetchNetwork(listed!.uuid),
-		enabled: listed !== undefined
+		enabled: listed !== undefined && !vanishing.has(listed.uuid)
 	}));
 	const modeText = (mode: string | null) =>
 		mode === null ? 'Isolated' : mode === 'nat' ? 'NAT' : mode === 'bridge' ? 'Host bridge' : mode;

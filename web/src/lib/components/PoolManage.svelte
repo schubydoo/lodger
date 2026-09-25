@@ -5,6 +5,8 @@
      stays last. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { vanishing } from '$lib/vanishing.svelte';
+	import { noAutofill } from '$lib/no-autofill';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
@@ -54,11 +56,18 @@
 		if (busy || typed !== pool.name) return;
 		changeProblem = removeProblem = null;
 		busy = 'remove';
+		// The page stops fetching the pool: libvirt's event for the removal would
+		// make it ask for the pool again and get 404.
+		vanishing.add(pool.uuid);
 		try {
 			await removePool(pool.uuid, { confirm: typed, deleteFiles, csrf: csrf() });
-			await client.invalidateQueries({ queryKey: keys.pools });
+			// Leave first, then drop the pool's cached detail and refresh the list.
 			await goto(resolve('/storage'));
+			client.removeQueries({ queryKey: keys.pool(pool.uuid) });
+			vanishing.delete(pool.uuid);
+			await client.invalidateQueries({ queryKey: keys.pools });
 		} catch (e) {
+			vanishing.delete(pool.uuid);
 			removeProblem = failed(e);
 		} finally {
 			busy = null;
@@ -103,7 +112,7 @@
 				<Input
 					id="remove-{pool.uuid}-name"
 					class="h-8 w-48"
-					autocomplete="off"
+					{...noAutofill}
 					spellcheck={false}
 					bind:value={typed}
 				/>

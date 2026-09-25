@@ -5,13 +5,14 @@
      libvirt defines, builds, and starts the pool in one call. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { noAutofill } from '$lib/no-autofill';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import Problem from '$lib/components/Problem.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
-	import { ApiError, createPool, keys, type NewPool, type Session } from '$lib/api';
+	import { ApiError, createPool, keys, type NewPool, type Session, fetchPool } from '$lib/api';
 
 	const client = useQueryClient();
 
@@ -46,11 +47,13 @@
 						autostart
 					};
 		try {
-			await createPool(pool, {
+			const { uuid } = await createPool(pool, {
 				csrf: client.getQueryData<Session | null>(keys.session)?.csrf_token
 			});
-			// The new page finds the pool in the list: refresh it first.
+			// The new page finds the pool in the list: refresh it first. Fetch the
+			// detail too, so the page opens with its data and shows no loading step.
 			await client.invalidateQueries({ queryKey: keys.pools });
+			await client.prefetchQuery({ queryKey: keys.pool(uuid), queryFn: () => fetchPool(uuid) });
 			await goto(resolve('/storage/[name]', { name: encodeURIComponent(pool.name) }));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
@@ -73,19 +76,19 @@
 	</fieldset>
 	<div class="flex flex-col gap-1">
 		<Label for="pool-name">Name</Label>
-		<Input id="pool-name" autocomplete="off" spellcheck={false} bind:value={name} />
+		<Input id="pool-name" {...noAutofill} spellcheck={false} bind:value={name} />
 	</div>
 	{#if kind === 'nfs'}
 		<div class="flex flex-col gap-1">
 			<Label for="pool-host">NFS server</Label>
-			<Input id="pool-host" autocomplete="off" spellcheck={false} bind:value={host} />
+			<Input id="pool-host" {...noAutofill} spellcheck={false} bind:value={host} />
 		</div>
 		<div class="flex flex-col gap-1">
 			<Label for="pool-export">Export path</Label>
 			<Input
 				id="pool-export"
 				placeholder="/volume1/vm"
-				autocomplete="off"
+				{...noAutofill}
 				spellcheck={false}
 				bind:value={exportPath}
 			/>
@@ -98,7 +101,7 @@
 			placeholder={kind === 'dir'
 				? '/var/lib/libvirt/images'
 				: `/var/lib/libvirt/pools/${name.trim() || 'name'}`}
-			autocomplete="off"
+			{...noAutofill}
 			spellcheck={false}
 			bind:value={path}
 		/>
