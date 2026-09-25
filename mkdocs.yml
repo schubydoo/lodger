@@ -1,0 +1,94 @@
+site_name: Lodger
+site_description: A self-hosted web UI for the KVM/QEMU VMs on your existing Linux host, with no reinstall.
+site_url: https://schubydoo.github.io/lodger/
+site_author: Schuby
+copyright: Apache-2.0
+
+repo_url: https://github.com/schubydoo/lodger
+repo_name: schubydoo/lodger
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+# The docs toolchain lockfile lives under docs/ for the workflow's `paths:`
+# filter, but it is build tooling, not site content.
+exclude_docs: |
+  requirements.in
+  requirements.txt
+
+# virt-pin.md is a note for maintainers. It stays in the repository, out of
+# the navigation.
+not_in_nav: |
+  virt-pin.md
+
+theme:
+  name: material
+  custom_dir: overrides
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.top
+    - navigation.sections
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+
+# Re-listing `search` is required: declaring any plugin disables the implicit default.
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  # The proxy page includes the tested configuration files from docs/proxy/.
+  # check_paths makes a moved or renamed file a build failure.
+  - pymdownx.snippets:
+      base_path: ['docs']
+      check_paths: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+extra:
+  version:
+    # mike drives the version selector (see .github/workflows/docs.yml).
+    provider: mike
+    default: latest
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Upgrading: upgrading.md
+  - Reverse proxy: reverse-proxy.md
+  - AppArmor: apparmor.md
+  - Security:
+      - Threat model: security/threat-model.md
+      - ASVS Level 1 checklist: security/asvs-level-1.md
+      - Security policy: https://github.com/schubydoo/lodger/blob/main/SECURITY.md
+  # Governance docs stay canonical on GitHub.
+  - Contributing: https://github.com/schubydoo/lodger/blob/main/CONTRIBUTING.md
+  - Architecture: https://github.com/schubydoo/lodger/blob/main/ARCHITECTURE.md
