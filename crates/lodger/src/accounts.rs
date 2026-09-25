@@ -205,10 +205,12 @@ impl std::fmt::Debug for PasswordChange {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct Changed {
     /// How many other sessions of the account ended.
     pub ended_sessions: usize,
+    /// The CSRF token of the new session that replaces the caller's.
+    pub csrf_token: String,
 }
 
 /// `POST /api/account/password`: the caller's own password.
@@ -266,15 +268,41 @@ pub async fn change_password(
         Ok(hash) => hash,
         Err(response) => return *response,
     };
-    let keep = crate::auth::session_key(&headers).expect("require_session found the cookie");
-    match state.db.change_password(account.id, hash, keep).await {
+    let current = crate::auth::session_key(&headers).expect("require_session found the cookie");
+    // ASVS 7.2.4: the change is a new authentication, so the caller gets a
+    // new session too.
+    let (token, new) = match crate::auth::new_session(account.id, ip, &headers) {
+        Ok(session) => session,
+        Err(e) => {
+            eprintln!("lodger: change the password: {e}");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cannot change the password",
+            );
+        }
+    };
+    let csrf_token = new.csrf_token.clone();
+    match state
+        .db
+        .change_password(account.id, hash, current, new)
+        .await
+    {
         Ok(ended_sessions) => {
             audit::log(&state.db, by(Entry::ok(CHANGE_PASSWORD))).await;
             eprintln!(
                 "lodger: accounts: {} changed the password; {ended_sessions} other sessions ended",
                 account.username
             );
-            Json(Changed { ended_sessions }).into_response()
+            let mut response = Json(Changed {
+                ended_sessions,
+                csrf_token,
+            })
+            .into_response();
+            response.headers_mut().insert(
+                axum::http::header::SET_COOKIE,
+                crate::auth::set_cookie(&token),
+            );
+            response
         }
         Err(e) => database_failed("change the password", &e),
     }

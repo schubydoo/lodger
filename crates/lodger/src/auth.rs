@@ -71,7 +71,29 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_owned())
 }
 
-fn set_cookie(token: &str) -> HeaderValue {
+/// A new session for the account: its token for the cookie, and the row to
+/// store, which holds only the token's hash.
+pub fn new_session(
+    account_id: i64,
+    ip: IpAddr,
+    headers: &HeaderMap,
+) -> Result<(String, NewSession), String> {
+    let token = random_token()?;
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().take(256).collect());
+    let new = NewSession {
+        token_sha256: token_hash(&token),
+        account_id,
+        csrf_token: random_token()?,
+        client_ip: ip.to_string(),
+        user_agent,
+    };
+    Ok((token, new))
+}
+
+pub fn set_cookie(token: &str) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict"
     ))
@@ -269,24 +291,22 @@ pub async fn login(
     };
     state.throttle.succeed(&login.username, ip, &attempt);
 
-    let (token, csrf_token) = match (random_token(), random_token()) {
-        (Ok(t), Ok(c)) => (t, c),
-        (Err(e), _) | (_, Err(e)) => {
+    let (token, new) = match new_session(account.id, ip, &headers) {
+        Ok(session) => session,
+        Err(e) => {
             eprintln!("lodger: login: {e}");
             return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot start a session");
         }
     };
-    let user_agent = headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.chars().take(256).collect());
-    let new = NewSession {
-        token_sha256: token_hash(&token),
-        account_id: account.id,
-        csrf_token: csrf_token.clone(),
-        client_ip: ip.to_string(),
-        user_agent,
-    };
+    let csrf_token = new.csrf_token.clone();
+    // ASVS 7.2.4: a login ends the session that the browser had before, so
+    // an old token cannot outlive the new one.
+    if let Some(old) = session_key(&headers)
+        && let Err(e) = state.db.delete_session(old).await
+    {
+        eprintln!("lodger: login: the database failed: {e}");
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot start a session");
+    }
     if let Err(e) = state.db.create_session(new).await {
         eprintln!("lodger: login: the database failed: {e}");
         return error(StatusCode::INTERNAL_SERVER_ERROR, "cannot start a session");

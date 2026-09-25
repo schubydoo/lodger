@@ -37,6 +37,20 @@ describe('the VM list', () => {
 		expect(screen.getByRole('link', { name: 'beta' })).toHaveAttribute('href', '/vms/beta');
 	});
 
+	it('encodes a name that holds URL characters', () => {
+		// libvirt allows these characters in a name made by another tool.
+		const odd = { ...vms[0], name: 'web #1?%' };
+		show((c) => c.setQueryData(keys.vms, [odd]));
+		expect(screen.getByRole('link', { name: 'web #1?%' })).toHaveAttribute(
+			'href',
+			'/vms/web%20%231%3F%25'
+		);
+		expect(screen.getByRole('link', { name: 'Console of web #1?%' })).toHaveAttribute(
+			'href',
+			'/vms/web%20%231%3F%25/console'
+		);
+	});
+
 	it('links the console of each running VM, and only of running ones', () => {
 		show((c) => c.setQueryData(keys.vms, vms));
 		expect(screen.getByRole('link', { name: 'Console of alpha' })).toHaveAttribute(
