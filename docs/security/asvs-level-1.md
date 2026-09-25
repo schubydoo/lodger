@@ -131,7 +131,7 @@ v1.0, the new v1.0 features get a new Level 1 review.
 | ID | Verdict | Evidence |
 | --- | --- | --- |
 | 12.1.1 | Pass | rustls allows only TLS 1.2 and TLS 1.3, and it prefers TLS 1.3. |
-| 12.2.1 | Pass | If TLS is set, Lodger serves only HTTPS and never falls back. Without TLS, Lodger refuses to start on an address that is not loopback, unless `trusted_proxies` names a reverse proxy with TLS. The operator can accept plain HTTP with `allow_plain_http = true`. That host then does not meet 12.2.1, and Lodger logs a warning at every start. Tests: `serve_refuses_plain_http_on_the_network_without_the_opt_in`, `only_plain_http_by_the_opt_in_gets_the_clear_text_warning`. |
+| 12.2.1 | Pass | If TLS is set, Lodger serves only HTTPS and never falls back. Without TLS, Lodger refuses to start on an address that is not loopback, unless `trusted_proxies` names a reverse proxy with TLS. `allow_plain_http = true` allows a TLS proxy that is not in `trusted_proxies`. If no TLS proxy sits in front, that host does not meet 12.2.1. Both cases log a warning at every start, and `lodger install` refuses the configuration without them. Tests: `serve_refuses_plain_http_on_the_network_without_the_opt_in`, `plain_http_on_the_network_gets_a_warning_that_fits_its_reason`, `plain_http_on_the_network_stops_the_install_unless_it_sets_tls`. |
 | 12.2.2 | N/A | Lodger is a LAN admin UI, not an external service. If you expose Lodger to the internet, use a publicly trusted certificate. |
 
 ## V13 Configuration
