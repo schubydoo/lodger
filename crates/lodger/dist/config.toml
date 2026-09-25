@@ -4,7 +4,8 @@
 
 # The address and port to listen on. Keep a loopback address unless TLS is
 # on. For remote access, set tls_cert and tls_key below, or put a reverse
-# proxy with TLS in front of Lodger.
+# proxy with TLS in front of Lodger. Lodger refuses to start on another
+# address without TLS, unless trusted_proxies or allow_plain_http is set.
 listen = "127.0.0.1:8460"
 
 # The libvirt connection.
@@ -24,3 +25,7 @@ uri = "qemu:///system"
 # at these paths and sets both keys.
 # tls_cert = "/etc/lodger/tls/cert.pem"
 # tls_key = "/etc/lodger/tls/key.pem"
+
+# Serve plain HTTP on an address that is not loopback, without TLS or a
+# proxy. Passwords then cross the network in clear text, so keep this off.
+# allow_plain_http = false

@@ -31,6 +31,8 @@ struct File {
     trusted_proxies: Vec<IpNet>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
+    #[serde(default)]
+    allow_plain_http: bool,
 }
 
 /// The PEM files for built-in TLS.
@@ -59,6 +61,9 @@ pub struct Config {
     pub trusted_proxies: Vec<IpNet>,
     /// Built-in TLS, when the file names both a certificate and a key.
     pub tls: Option<TlsFiles>,
+    /// Serve plain HTTP on an address that is not loopback, and accept that
+    /// passwords cross the network in clear text.
+    pub allow_plain_http: bool,
 }
 
 /// Command-line values that override the file.
@@ -132,7 +137,36 @@ impl Config {
                 // Half a pair would silently serve plain HTTP.
                 _ => return Err("set both tls_cert and tls_key, or neither".to_owned()),
             },
+            allow_plain_http: file.allow_plain_http,
         })
+    }
+
+    /// ASVS 12.2.1: a browser on the network must reach Lodger over TLS.
+    /// Plain HTTP on an address that is not loopback needs a reverse proxy
+    /// with TLS, named in `trusted_proxies`, or the explicit opt-in.
+    pub fn check_plain_http(&self) -> Result<(), String> {
+        if self.listen.ip().is_loopback()
+            || self.tls.is_some()
+            || !self.trusted_proxies.is_empty()
+            || self.allow_plain_http
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "listen = {} is not loopback, and TLS is off, so passwords would cross the network \
+             in clear text. Set tls_cert and tls_key (sudo lodger install --self-signed <ip> \
+             makes a pair), or set trusted_proxies for a reverse proxy with TLS, or set \
+             allow_plain_http = true to accept the risk",
+            self.listen
+        ))
+    }
+
+    /// Whether Lodger serves plain HTTP on the network by the opt-in alone.
+    pub fn plain_http_by_opt_in(&self) -> bool {
+        self.allow_plain_http
+            && !self.listen.ip().is_loopback()
+            && self.tls.is_none()
+            && self.trusted_proxies.is_empty()
     }
 }
 
@@ -175,6 +209,43 @@ mod tests {
         assert_eq!(c.state_dir, PathBuf::from(DEFAULT_STATE_DIR));
         assert!(c.public_url.is_none() && c.trusted_proxies.is_empty());
         assert!(c.tls.is_none());
+        assert!(!c.allow_plain_http);
+    }
+
+    #[test]
+    fn plain_http_on_the_network_needs_tls_a_proxy_or_the_opt_in() {
+        let load = |text: &str| {
+            let f = file(text);
+            Config::load(with_config(f.path().into()), None).unwrap()
+        };
+        let tls = "tls_cert = \"/c.pem\"\ntls_key = \"/k.pem\"";
+        for (text, allowed, by_opt_in) in [
+            ("", true, false),
+            ("listen = \"[::1]:8460\"", true, false),
+            ("listen = \"0.0.0.0:8460\"", false, false),
+            ("listen = \"192.168.1.10:8460\"", false, false),
+            (&format!("listen = \"0.0.0.0:8460\"\n{tls}"), true, false),
+            (
+                "listen = \"0.0.0.0:8460\"\ntrusted_proxies = [\"172.17.0.0/16\"]",
+                true,
+                false,
+            ),
+            (
+                "listen = \"0.0.0.0:8460\"\nallow_plain_http = true",
+                true,
+                true,
+            ),
+            ("allow_plain_http = true", true, false),
+        ] {
+            let c = load(text);
+            assert_eq!(c.check_plain_http().is_ok(), allowed, "{text}");
+            assert_eq!(c.plain_http_by_opt_in(), by_opt_in, "{text}");
+        }
+        let err = load("listen = \"0.0.0.0:8460\"")
+            .check_plain_http()
+            .unwrap_err();
+        assert!(err.contains("allow_plain_http = true"), "{err}");
+        assert!(err.contains("--self-signed"), "{err}");
     }
 
     #[test]

@@ -695,27 +695,78 @@ fn serve_refuses_to_start_with_a_bad_tls_pair() {
 }
 
 #[test]
-fn only_a_non_loopback_address_without_tls_gets_the_clear_text_warning() {
+fn serve_refuses_plain_http_on_the_network_without_the_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "uri = \"{TEST_URI}\"\nstate_dir = \"{}\"\n",
+            dir.path().join("state").display()
+        ),
+    )
+    .unwrap();
+    let mut child = lodger()
+        .args(["serve", "--listen", "0.0.0.0:0", "--config"])
+        .arg(&config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lodger runs");
+    // A server that starts would run until it is stopped, so wait with a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("lodger serve started on 0.0.0.0 without TLS");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "no address line");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("is not loopback, and TLS is off"),
+        "{stderr}"
+    );
+    // The check comes first: no database was made.
+    assert!(!dir.path().join("state").exists());
+}
+
+#[test]
+fn only_plain_http_by_the_opt_in_gets_the_clear_text_warning() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key, _) = tls_pair(dir.path());
-    for (extra, warned, tls) in [
-        (String::new(), true, "TLS off".to_owned()),
+    for (extra, warned, summary) in [
+        (
+            "allow_plain_http = true\n".to_owned(),
+            true,
+            "0 trusted proxies, TLS off\n".to_owned(),
+        ),
         (
             tls_config(&cert, &key),
             false,
-            format!("TLS {}", cert.display()),
+            format!("0 trusted proxies, TLS {}\n", cert.display()),
+        ),
+        (
+            "trusted_proxies = [\"172.17.0.0/16\"]\n".to_owned(),
+            false,
+            "1 trusted proxies, TLS off\n".to_owned(),
         ),
     ] {
-        let (mut server, _line, mut stderr) = serve_config("0.0.0.0:0", &extra);
+        let (mut server, line, mut stderr) = serve_config("0.0.0.0:0", &extra);
+        assert!(line.starts_with("lodger listening on "), "{extra}: {line}");
         server.stop();
         let mut log = String::new();
         stderr.read_to_string(&mut log).unwrap();
         assert_eq!(
             log.contains("which is not loopback, without TLS"),
             warned,
-            "{log}"
+            "{extra}: {log}"
         );
-        assert!(log.contains(&format!("trusted proxies, {tls}\n")), "{log}");
+        assert!(log.contains(&summary), "{extra}: {log}");
     }
 }
 
