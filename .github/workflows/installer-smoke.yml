@@ -102,9 +102,11 @@ jobs:
               systemd systemd-sysv libvirt-daemon-system curl ca-certificates
           - name: Rocky 9
             image: "rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f"
+            # The image ships curl-minimal, which conflicts with the curl
+            # package and already provides the curl command.
             setup: >-
               dnf install -y systemd libvirt-daemon libvirt-daemon-driver-qemu
-              libvirt-daemon-config-network curl ca-certificates tar
+              libvirt-daemon-config-network ca-certificates tar
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
