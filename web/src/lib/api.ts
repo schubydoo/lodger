@@ -321,13 +321,13 @@ export const fetchNetworks = (fetcher?: typeof fetch) =>
 	getJson<Network[]>('/api/networks', fetcher);
 export const fetchNetwork = (id: string, fetcher?: typeof fetch) =>
 	getJson<NetworkDetail>(`/api/networks/${id}`, fetcher);
-/** The bridges on the host. Lodger only reads them. */
 /** A bridge on the host. `owner` names a libvirt network or Docker, or is null. */
 export interface HostBridge {
 	name: string;
 	owner: string | null;
 }
 
+/** The bridges on the host. Lodger only reads them. */
 export const fetchHostBridges = (fetcher?: typeof fetch) =>
 	getJson<HostBridge[]>('/api/host-bridges', fetcher);
 

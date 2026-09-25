@@ -39,8 +39,11 @@
 	let busy = $state(false);
 	let problem = $state<unknown>(null);
 
+	// A bridge counts only while the list shows it: a bridge picked under "Show
+	// every bridge" is not sent after the switch goes off again.
 	const ready = $derived(
-		name.trim() !== '' && (mode === 'bridge' ? bridge !== '' : subnet.trim() !== '')
+		name.trim() !== '' &&
+			(mode === 'bridge' ? offered.some((b) => b.name === bridge) : subnet.trim() !== '')
 	);
 
 	async function submit(event: SubmitEvent) {

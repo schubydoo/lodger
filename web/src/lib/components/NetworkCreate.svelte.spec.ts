@@ -95,6 +95,16 @@ describe('the New network form', () => {
 		expect(options()).toEqual(['br0']);
 		await fireEvent.click(screen.getByLabelText(/Show every bridge/));
 		expect(options()).toEqual(['br0', 'virbr0 (libvirt network default)']);
+		// A hidden bridge is never sent: after the switch goes off, the form
+		// waits for a new pick.
+		await type('Name', 'lan');
+		await fireEvent.change(screen.getByLabelText('Host bridge', { selector: 'select' }), {
+			target: { value: 'virbr0' }
+		});
+		const create = screen.getByRole('button', { name: 'Create network' });
+		expect(create).toBeEnabled();
+		await fireEvent.click(screen.getByLabelText(/Show every bridge/));
+		expect(create).toBeDisabled();
 	});
 
 	it('explains when every bridge belongs to libvirt or Docker', async () => {
