@@ -72,7 +72,7 @@
 				<Table.Row>
 					<Table.Cell class="font-medium">
 						<a
-							href={resolve('/vms/[name]', { name: vm.name })}
+							href={resolve('/vms/[name]', { name: encodeURIComponent(vm.name) })}
 							class="rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 						>
 							{vm.name}
@@ -93,7 +93,7 @@
 							<!-- The label names the VM, and it contains the visible
 							     word, as WCAG 2.5.3 (label in name) asks. -->
 							<a
-								href={resolve('/vms/[name]/console', { name: vm.name })}
+								href={resolve('/vms/[name]/console', { name: encodeURIComponent(vm.name) })}
 								aria-label="Console of {vm.name}"
 								class="rounded-sm text-sm underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 							>

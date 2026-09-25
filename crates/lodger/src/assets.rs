@@ -111,7 +111,7 @@ fn file(method: &Method, headers: &HeaderMap, asset: Asset, cache: &'static str)
         builder = builder.status(StatusCode::NOT_MODIFIED);
         return builder.body(Body::empty()).expect("valid response");
     }
-    let mime = HeaderValue::from_str(&asset.mime)
+    let mime = HeaderValue::from_str(&with_charset(&asset.mime))
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     builder = builder
         .header(header::CONTENT_TYPE, mime)
@@ -122,6 +122,23 @@ fn file(method: &Method, headers: &HeaderMap, asset: Asset, cache: &'static str)
         Body::from(asset.bytes)
     };
     builder.body(body).expect("valid response")
+}
+
+/// The media type with `charset=utf-8` for text, which the build writes as
+/// UTF-8 (ASVS 4.1.1). A type that names a charset already stays as it is.
+fn with_charset(mime: &str) -> String {
+    let text = mime.starts_with("text/")
+        || matches!(
+            mime,
+            "application/javascript" | "application/json" | "application/xml" | "image/svg+xml"
+        )
+        || mime.ends_with("+xml")
+        || mime.ends_with("+json");
+    if text && !mime.contains("charset=") {
+        format!("{mime}; charset=utf-8")
+    } else {
+        mime.to_owned()
+    }
 }
 
 fn html(method: &Method, page: &'static str) -> Response {
@@ -192,7 +209,10 @@ mod tests {
         let r = get(&app(), "/_app/immutable/entry/start.abc123.js");
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(header(&r, header::CACHE_CONTROL), IMMUTABLE_CACHE);
-        assert_eq!(header(&r, header::CONTENT_TYPE), "text/javascript");
+        assert_eq!(
+            header(&r, header::CONTENT_TYPE),
+            "text/javascript; charset=utf-8"
+        );
     }
 
     #[test]
@@ -208,7 +228,7 @@ mod tests {
         for path in ["/", "", "/vms", "/vms/web1/console"] {
             let r = get(&app(), path);
             assert_eq!(r.status(), StatusCode::OK, "path {path:?}");
-            assert_eq!(header(&r, header::CONTENT_TYPE), "text/html");
+            assert_eq!(header(&r, header::CONTENT_TYPE), "text/html; charset=utf-8");
             assert_eq!(header(&r, header::CACHE_CONTROL), REVALIDATE);
         }
     }
@@ -278,5 +298,24 @@ mod tests {
         // Present or not, a lookup through the real embed must not panic.
         let _ = Embedded.get(FALLBACK);
         assert!(Embedded.get("no/such/file.xyz").is_none());
+    }
+
+    #[test]
+    fn text_types_name_utf_8_and_binary_types_do_not() {
+        for (mime, want) in [
+            ("text/css", "text/css; charset=utf-8"),
+            ("application/json", "application/json; charset=utf-8"),
+            ("image/svg+xml", "image/svg+xml; charset=utf-8"),
+            (
+                "application/manifest+json",
+                "application/manifest+json; charset=utf-8",
+            ),
+            ("text/plain; charset=utf-8", "text/plain; charset=utf-8"),
+            ("image/png", "image/png"),
+            ("font/woff2", "font/woff2"),
+            ("application/octet-stream", "application/octet-stream"),
+        ] {
+            assert_eq!(super::with_charset(mime), want, "{mime}");
+        }
     }
 }

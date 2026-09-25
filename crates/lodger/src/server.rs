@@ -38,6 +38,9 @@ pub struct AppState {
     pub csp: Arc<HeaderValue>,
     /// Live VM stats for the sockets that subscribe.
     pub stats: Stats,
+    /// Lodger serves HTTPS itself, so every response carries HSTS. Behind a
+    /// reverse proxy, the proxy sets it.
+    pub hsts: bool,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
             throttle: Arc::default(),
             tickets: Arc::default(),
             trusted_proxies: Arc::new(trusted_proxies),
+            hsts: false,
         }
     }
 }
@@ -167,13 +171,14 @@ pub async fn serve(config: Config) -> Result<(), String> {
         db.clone(),
         std::time::Duration::from_secs(24 * 60 * 60),
     ));
-    let state = AppState::new(
+    let mut state = AppState::new(
         Arc::new(host),
         db,
         setup,
         config.trusted_proxies.clone(),
         config.public_url.clone(),
     );
+    state.hsts = tls.is_some();
     let listen = config.listen;
     let fail = |e: std::io::Error| format!("cannot serve on {listen}: {e}");
     let listener = tokio::net::TcpListener::bind(listen).await.map_err(fail)?;
@@ -782,6 +787,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_login_ends_the_session_that_the_browser_had() {
+        let (addr, tab) = serve_admin().await;
+        let other_tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let body = serde_json::json!({"username": "admin", "password": GOOD_PASSWORD});
+        let (status, out) = raw(
+            &addr,
+            "POST",
+            "/api/session",
+            &[
+                format!("Cookie: {}", tab.cookie),
+                SAME_ORIGIN.into(),
+                "Content-Type: application/json".into(),
+            ],
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, 200, "{out}");
+        // ASVS 7.2.4: the old token ends. A session of another browser stays.
+        assert_eq!(call(&addr, &tab, "GET", "/api/vms", None).await.0, 401);
+        assert_eq!(
+            call(&addr, &other_tab, "GET", "/api/vms", None).await.0,
+            200
+        );
+    }
+
+    #[tokio::test]
     async fn a_wrong_password_and_an_unknown_user_get_the_same_answer() {
         let (addr, token, _state) = serve_setup().await;
         post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
@@ -838,6 +869,56 @@ mod tests {
             &claim(&token, "admin", GOOD_PASSWORD).to_string(),
         )
         .await;
+        assert_eq!(status, 201);
+    }
+
+    /// TAD 7.8 and ASVS 3.5.1: a state-changing call without the CSRF
+    /// token, from a wrong Origin, or from a sibling subdomain fails and
+    /// changes nothing. The same call with both checks passes.
+    #[tokio::test]
+    async fn a_change_needs_the_csrf_token_and_the_lodger_origin() {
+        let (addr, token, _state) = serve_setup_at(Some("https://lodger.lan")).await;
+        post_json(&addr, "/api/setup", &claim(&token, "admin", GOOD_PASSWORD)).await;
+        let tab = log_in_tab(&addr, "admin", GOOD_PASSWORD).await;
+        let body =
+            serde_json::json!({ "username": "second", "password": GOOD_PASSWORD }).to_string();
+        let cookie = format!("Cookie: {}", tab.cookie);
+        let csrf = format!("X-CSRF-Token: {}", tab.csrf);
+        let json = "Content-Type: application/json".to_owned();
+        let refused = [
+            (
+                "no CSRF token",
+                vec![cookie.clone(), SAME_ORIGIN.into(), json.clone()],
+            ),
+            (
+                "a wrong Origin",
+                vec![
+                    cookie.clone(),
+                    csrf.clone(),
+                    "Origin: https://attacker.example".into(),
+                    json.clone(),
+                ],
+            ),
+            (
+                "a sibling subdomain",
+                vec![
+                    cookie.clone(),
+                    csrf.clone(),
+                    "Sec-Fetch-Site: same-site".into(),
+                    "Origin: https://evil.lodger.lan".into(),
+                    json.clone(),
+                ],
+            ),
+        ];
+        for (case, headers) in refused {
+            let (status, _) = raw(&addr, "POST", "/api/accounts", &headers, &body).await;
+            assert_eq!(status, 403, "{case}");
+        }
+        let (_, accounts) = call(&addr, &tab, "GET", "/api/accounts", None).await;
+        assert_eq!(accounts.as_array().unwrap().len(), 1, "nothing changed");
+
+        let allowed = [cookie, csrf, "Origin: https://lodger.lan".into(), json];
+        let (status, _) = raw(&addr, "POST", "/api/accounts", &allowed, &body).await;
         assert_eq!(status, 201);
     }
 
@@ -1023,6 +1104,37 @@ mod tests {
         assert_eq!(call(&addr, &tab, "DELETE", &path, None).await.0, 404);
     }
 
+    /// Changes the password from `tab`. Returns the status, the body, and
+    /// the new session that replaces the tab's, if the change set one.
+    async fn change_password(addr: &str, tab: &Tab, body: Value) -> (u16, Value, Option<Tab>) {
+        let headers = [
+            format!("Cookie: {}", tab.cookie),
+            SAME_ORIGIN.into(),
+            format!("X-CSRF-Token: {}", tab.csrf),
+            "Content-Type: application/json".into(),
+        ];
+        let (status, out) = raw(
+            addr,
+            "POST",
+            "/api/account/password",
+            &headers,
+            &body.to_string(),
+        )
+        .await;
+        let answer: Value = serde_json::from_str(&body_of(&out)).unwrap_or(Value::Null);
+        let cookie = out
+            .lines()
+            .find_map(|l| l.strip_prefix("set-cookie: "))
+            .and_then(|v| v.split(';').next());
+        let new_tab = cookie
+            .zip(answer["csrf_token"].as_str())
+            .map(|(cookie, csrf)| Tab {
+                cookie: cookie.to_owned(),
+                csrf: csrf.to_owned(),
+            });
+        (status, answer, new_tab)
+    }
+
     #[tokio::test]
     async fn a_password_change_needs_the_current_password_and_ends_other_sessions() {
         let (addr, tab) = serve_admin().await;
@@ -1045,11 +1157,23 @@ mod tests {
             "current_password": GOOD_PASSWORD,
             "new_password": OTHER_PASSWORD,
         });
-        let (status, answer) =
-            call(&addr, &tab, "POST", "/api/account/password", Some(right)).await;
-        assert_eq!(status, 200, "{answer}");
+        let (status, answer, new_tab) = change_password(&addr, &tab, right).await;
+        // No answer in the message: it holds the new CSRF token.
+        assert_eq!(status, 200);
         assert_eq!(answer["ended_sessions"], 1);
-        assert_eq!(call(&addr, &tab, "GET", "/api/vms", None).await.0, 200);
+        // ASVS 7.2.4: the caller gets a new session, and the old token ends.
+        let new_tab = new_tab.expect("the change sets a new cookie");
+        assert_ne!(new_tab.cookie, tab.cookie);
+        assert_ne!(new_tab.csrf, tab.csrf);
+        assert_eq!(call(&addr, &tab, "GET", "/api/vms", None).await.0, 401);
+        assert_eq!(call(&addr, &new_tab, "GET", "/api/vms", None).await.0, 200);
+        // The new CSRF token works for the next state-changing call.
+        assert_eq!(
+            call(&addr, &new_tab, "POST", "/api/ws-tickets", None)
+                .await
+                .0,
+            201
+        );
         assert_eq!(
             call(&addr, &other_tab, "GET", "/api/vms", None).await.0,
             401
@@ -1109,7 +1233,9 @@ mod tests {
         assert_eq!(call(&addr, &tab, "POST", path, Some(wrong)).await.0, 403);
         let right =
             serde_json::json!({"current_password": GOOD_PASSWORD, "new_password": OTHER_PASSWORD});
-        assert_eq!(call(&addr, &tab, "POST", path, Some(right)).await.0, 200);
+        let (status, _, tab) = change_password(&addr, &tab, right).await;
+        assert_eq!(status, 200);
+        let tab = tab.expect("the change sets a new cookie");
         let second = format!("/api/accounts/{}", second["id"]);
         assert_eq!(call(&addr, &tab, "DELETE", &second, None).await.0, 204);
         let (_, list) = call(&addr, &tab, "GET", "/api/accounts", None).await;

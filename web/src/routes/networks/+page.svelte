@@ -36,7 +36,7 @@
 				<Table.Row>
 					<Table.Cell class="font-medium">
 						<a
-							href={resolve('/networks/[name]', { name: network.name })}
+							href={resolve('/networks/[name]', { name: encodeURIComponent(network.name) })}
 							class="rounded-sm underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 						>
 							{network.name}

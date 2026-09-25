@@ -264,6 +264,8 @@ fn health_reports_the_database_and_libvirt() {
     let reply = http_get(&addr, "/api/health");
     assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
     assert!(reply.contains(r#""database":"ok""#), "{reply}");
+    // Plain HTTP sends no HSTS: a proxy in front sets its own.
+    assert!(!reply.contains("strict-transport-security"), "{reply}");
     server.stop();
 }
 
@@ -641,6 +643,11 @@ fn serve_answers_https_with_the_configured_pair() {
     let answer = https_get(&addr, "/api/health", root);
     assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
     assert!(answer.contains("\"database\""), "{answer}");
+    // ASVS 3.4.1: HSTS for at least a year, on every HTTPS answer.
+    assert!(
+        answer.contains("strict-transport-security: max-age=31536000\r\n"),
+        "{answer}"
+    );
 
     // Plain HTTP gets no HTTP answer: there is no fallback.
     let mut plain = TcpStream::connect(&addr).unwrap();
