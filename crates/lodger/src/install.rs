@@ -315,6 +315,14 @@ fn check(host: &Host, self_signed: Option<&str>, run: &mut impl Run) -> Result<S
         };
         match Config::load(overrides, None) {
             Ok(config) => {
+                // The service would refuse to start with this configuration,
+                // after the new binary is in place. `--self-signed` sets TLS,
+                // which is one of the fixes that the message names.
+                if self_signed.is_none()
+                    && let Err(e) = config.check_plain_http()
+                {
+                    problems.push(format!("{e}."));
+                }
                 // Never replace a certificate that the operator chose.
                 if self_signed.is_some()
                     && let Some(tls) = config.tls
@@ -759,6 +767,22 @@ mod tests {
         .listen;
         assert_eq!(listen.to_string(), "127.0.0.1:9123");
         assert_eq!(read(&host, CONFIG_FILE), "listen = \"127.0.0.1:9123\"\n");
+    }
+
+    #[test]
+    fn plain_http_on_the_network_stops_the_install_unless_it_sets_tls() {
+        let (_dir, host, exe) = ready_host();
+        put(&host, CONFIG_FILE, "listen = \"0.0.0.0:8460\"\n");
+        let before = tree(&host);
+        let mut run = Recorder::default();
+        let err = install(&host, &exe, None, SystemTime::now(), &mut run).unwrap_err();
+        assert!(err.contains("is not loopback, and TLS is off"), "{err}");
+        assert!(run.calls.is_empty());
+        assert_eq!(tree(&host), before);
+        // --self-signed sets TLS, so it is the fix, not a problem.
+        let mut run = Recorder::default();
+        let err = check(&host, Some("192.168.1.10"), &mut run).err();
+        assert!(!err.is_some_and(|e| e.contains("TLS is off")));
     }
 
     #[test]
