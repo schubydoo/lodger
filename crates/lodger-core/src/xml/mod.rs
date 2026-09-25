@@ -190,6 +190,19 @@ pub fn domain_networks(xml: &str) -> Result<Vec<String>, XmlError> {
     Ok(names)
 }
 
+/// Whether a domain has a VNC display: a `<graphics type="vnc">` device. The
+/// browser console speaks VNC only, so a VM without one has no console.
+pub fn domain_has_vnc(xml: &str) -> Result<bool, XmlError> {
+    let domain = parse(xml, "domain")?;
+    Ok(domain.get_child("devices").is_some_and(|devices| {
+        devices
+            .children
+            .iter()
+            .filter_map(XMLNode::as_element)
+            .any(|e| e.name == "graphics" && attr(e, "type") == Some("vnc"))
+    }))
+}
+
 fn attr<'a>(element: &'a Element, name: &str) -> Option<&'a str> {
     element.attributes.get(name).map(String::as_str)
 }
@@ -343,6 +356,28 @@ mod tests {
                 expected: "domain"
             })
         );
+    }
+
+    #[test]
+    fn only_a_vnc_graphics_device_counts_as_a_console() {
+        let with =
+            |devices: &str| format!("<domain><name>x</name><devices>{devices}</devices></domain>");
+        assert_eq!(
+            domain_has_vnc(&with(r#"<graphics type="vnc" port="-1"/>"#)),
+            Ok(true)
+        );
+        // The browser console speaks VNC only.
+        assert_eq!(
+            domain_has_vnc(&with(r#"<graphics type="spice"/>"#)),
+            Ok(false)
+        );
+        // The real VMs of the dogfood host: a serial console and no graphics.
+        assert_eq!(
+            domain_has_vnc(&with(r#"<serial type="pty"/><console type="pty"/>"#)),
+            Ok(false)
+        );
+        assert_eq!(domain_has_vnc("<domain><name>x</name></domain>"), Ok(false));
+        assert!(domain_has_vnc("<network/>").is_err());
     }
 
     #[test]

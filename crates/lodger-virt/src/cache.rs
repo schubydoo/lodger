@@ -106,6 +106,9 @@ fn gone_is_none<T>(result: Result<T, Error>) -> Result<Option<T>, Error> {
 
 fn vm_of(dom: &virt::domain::Domain) -> Result<Vm, Error> {
     let info = dom.info()?;
+    // XML that Lodger cannot read counts as no display: the console page then
+    // explains, instead of opening a socket that fails.
+    let has_vnc = lodger_core::xml::domain_has_vnc(&dom.xml_desc(0)?).unwrap_or(false);
     Ok(Vm {
         uuid: dom.uuid()?,
         name: dom.name()?,
@@ -114,6 +117,7 @@ fn vm_of(dom: &virt::domain::Domain) -> Result<Vm, Error> {
         memory_kib: info.memory,
         persistent: dom.is_persistent()?,
         autostart: dom.autostart()?,
+        has_vnc,
     })
 }
 
@@ -161,6 +165,27 @@ mod tests {
         assert!(inv.vms.values().any(|vm| vm.name == "test"));
         assert!(inv.pools.values().any(|pool| pool.name == "default-pool"));
         assert!(inv.networks.values().any(|net| net.name == "default"));
+    }
+
+    #[test]
+    fn a_vm_has_vnc_only_with_a_vnc_display() {
+        let conn = conn();
+        let define = |name: &str, devices: &str| {
+            conn.define_domain_xml(&format!(
+                "<domain type='test'><name>{name}</name><memory>1024</memory>\
+                 <os><type>hvm</type></os><devices>{devices}</devices></domain>"
+            ))
+            .unwrap()
+        };
+        let with = define("cache-vnc-with", "<graphics type='vnc' port='-1'/>");
+        let without = define("cache-vnc-without", "<serial type='pty'/>");
+        let inv = Inventory::load(&conn).unwrap();
+        let has_vnc = |name: &str| inv.vms.values().find(|vm| vm.name == name).unwrap().has_vnc;
+        let (yes, no) = (has_vnc("cache-vnc-with"), has_vnc("cache-vnc-without"));
+        with.undefine().unwrap();
+        without.undefine().unwrap();
+        assert!(yes);
+        assert!(!no);
     }
 
     #[test]

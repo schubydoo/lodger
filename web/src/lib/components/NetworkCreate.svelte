@@ -30,6 +30,11 @@
 	let name = $state('');
 	let subnet = $state('');
 	let bridge = $state('');
+	// The form offers the bridges that nothing owns. A libvirt network's bridge
+	// or a Docker bridge is almost never the LAN, but a host can name its LAN
+	// bridge freely, so the others stay one click away.
+	let everyBridge = $state(false);
+	const offered = $derived((bridges.data ?? []).filter((b) => everyBridge || b.owner === null));
 	let autostart = $state(true);
 	let busy = $state(false);
 	let problem = $state<unknown>(null);
@@ -91,19 +96,33 @@
 				with NetworkManager or systemd-networkd. Lodger never changes the host's network.
 			</p>
 		{:else}
-			<div class="flex flex-col gap-1">
-				<Label for="network-bridge">Host bridge</Label>
-				<select
-					id="network-bridge"
-					class="h-9 rounded-md border bg-background px-2 text-sm"
-					bind:value={bridge}
-				>
-					<option value="" disabled>Pick a bridge</option>
-					{#each bridges.data as name (name)}
-						<option value={name}>{name}</option>
-					{/each}
-				</select>
-			</div>
+			{#if offered.length === 0}
+				<p role="note" class="text-sm">
+					Every bridge on this host belongs to a libvirt network or to Docker. A host bridge for the
+					LAN must exist first: create it on the host, for example with NetworkManager or
+					systemd-networkd.
+				</p>
+			{:else}
+				<div class="flex flex-col gap-1">
+					<Label for="network-bridge">Host bridge</Label>
+					<select
+						id="network-bridge"
+						class="h-9 rounded-md border bg-background px-2 text-sm"
+						bind:value={bridge}
+					>
+						<option value="" disabled>Pick a bridge</option>
+						{#each offered as b (b.name)}
+							<option value={b.name}>{b.owner ? `${b.name} (${b.owner})` : b.name}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
+			{#if bridges.data.some((b) => b.owner !== null)}
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" bind:checked={everyBridge} />
+					Show every bridge, also those of libvirt networks and Docker
+				</label>
+			{/if}
 		{/if}
 	{:else}
 		<div class="flex flex-col gap-1">

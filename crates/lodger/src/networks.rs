@@ -101,9 +101,60 @@ pub async fn list(State(state): State<AppState>) -> Json<Vec<Network>> {
     Json(networks)
 }
 
-/// `GET /api/host-bridges`.
-pub async fn host_bridges() -> Json<Vec<String>> {
-    Json(lodger_virt::host_bridges())
+/// A bridge on the host, and what owns it, if anything.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct HostBridge {
+    pub name: String,
+    /// `None` for a bridge that the host owner made, such as a LAN bridge.
+    /// Otherwise it names the owner: a libvirt network, or Docker.
+    pub owner: Option<String>,
+}
+
+/// `GET /api/host-bridges`. The form offers the bridges without an owner, and
+/// the others on request: a host can name its LAN bridge freely.
+pub async fn host_bridges(State(state): State<AppState>) -> Json<Vec<HostBridge>> {
+    // Without libvirt, the libvirt owners are unknown, and the list still helps.
+    let networks = match state.host.virt() {
+        Some(virt) => virt.network_xmls().await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let libvirt: Vec<(String, String)> = networks
+        .iter()
+        .filter_map(|(name, xml)| {
+            let xml = NetworkXml::parse(xml).ok()?;
+            // A host-bridge network uses a bridge that exists already. A NAT or
+            // isolated network creates its own, such as virbr0.
+            if xml.forward_mode() == Some("bridge") {
+                return None;
+            }
+            Some((xml.bridge()?.to_owned(), name.clone()))
+        })
+        .collect();
+    Json(
+        lodger_virt::host_bridges()
+            .into_iter()
+            .map(|name| HostBridge {
+                owner: bridge_owner(&name, &libvirt),
+                name,
+            })
+            .collect(),
+    )
+}
+
+/// The owner of bridge `name`. `libvirt` holds each bridge that a libvirt
+/// network created, with the network's name.
+fn bridge_owner(name: &str, libvirt: &[(String, String)]) -> Option<String> {
+    if let Some((_, network)) = libvirt.iter().find(|(bridge, _)| bridge == name) {
+        return Some(format!("libvirt network {network}"));
+    }
+    // Docker's default bridge, and its user networks: `br-` and 12 hex digits.
+    let docker_network = name
+        .strip_prefix("br-")
+        .is_some_and(|id| id.len() == 12 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    if name == "docker0" || docker_network {
+        return Some("Docker".to_owned());
+    }
+    None
 }
 
 /// `GET /api/networks/{id}`.
@@ -331,5 +382,30 @@ pub async fn remove(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => *response,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bridge_owner;
+
+    #[test]
+    fn libvirt_and_docker_bridges_have_an_owner_and_a_lan_bridge_has_none() {
+        let libvirt = vec![("virbr0".to_owned(), "default".to_owned())];
+        let owner = |name: &str| bridge_owner(name, &libvirt);
+        assert_eq!(owner("virbr0").as_deref(), Some("libvirt network default"));
+        assert_eq!(owner("docker0").as_deref(), Some("Docker"));
+        assert_eq!(owner("br-1a2b3c4d5e6f").as_deref(), Some("Docker"));
+        // A LAN bridge, including one that only looks a little like Docker's.
+        for name in [
+            "br0",
+            "lan",
+            "br-lan",
+            "br-1a2b3c4d5e6",
+            "br-1a2b3c4d5e6fa",
+            "br-1a2b3c4d5e6g",
+        ] {
+            assert_eq!(owner(name), None, "{name}");
+        }
     }
 }

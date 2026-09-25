@@ -18,7 +18,9 @@
 	// The UUID to connect to, or `undefined` while the VM does not run. A
 	// string compares by value, so a change to another field of the VM, such
 	// as its memory, does not reconnect the console.
-	const target = $derived(vm?.state === 'running' ? vm.uuid : undefined);
+	// A VM without a VNC display gets no socket: it can only fail, and a browser
+	// cannot read why.
+	const target = $derived(vm?.state === 'running' && vm.has_vnc ? vm.uuid : undefined);
 
 	// Connect once the VM is known to run, with a fresh ticket. The socket
 	// closes when the page goes away, and the server then closes the display
@@ -69,6 +71,11 @@
 	<p role="alert">No virtual machine is called {name}.</p>
 {:else if vm.state !== 'running'}
 	<p>{name} is not running, so it has no screen to show.</p>
+{:else if !vm.has_vnc}
+	<p>
+		{name} has no graphical display, so the browser console cannot show it. The VM has no VNC device in
+		its configuration. A serial console comes in a later release.
+	</p>
 {:else}
 	<div class="mb-3 flex flex-wrap items-center gap-4">
 		<p role="status" class="text-sm text-muted-foreground">{statusText(status)}</p>

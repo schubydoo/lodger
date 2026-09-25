@@ -21,6 +21,8 @@ export interface Vm {
 	/** `false` for a transient domain, which disappears when it stops. */
 	persistent: boolean;
 	autostart: boolean;
+	/** Whether the VM has a VNC display, which the browser console needs. */
+	has_vnc: boolean;
 }
 
 /**
@@ -320,8 +322,14 @@ export const fetchNetworks = (fetcher?: typeof fetch) =>
 export const fetchNetwork = (id: string, fetcher?: typeof fetch) =>
 	getJson<NetworkDetail>(`/api/networks/${id}`, fetcher);
 /** The bridges on the host. Lodger only reads them. */
+/** A bridge on the host. `owner` names a libvirt network or Docker, or is null. */
+export interface HostBridge {
+	name: string;
+	owner: string | null;
+}
+
 export const fetchHostBridges = (fetcher?: typeof fetch) =>
-	getJson<string[]>('/api/host-bridges', fetcher);
+	getJson<HostBridge[]>('/api/host-bridges', fetcher);
 
 /** A new network. */
 export type NewNetwork =

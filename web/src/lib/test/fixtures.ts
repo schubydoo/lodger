@@ -23,7 +23,8 @@ export const vms: Vm[] = [
 		vcpus: 2,
 		memory_kib: 4194304,
 		persistent: true,
-		autostart: true
+		autostart: true,
+		has_vnc: true
 	},
 	{
 		uuid: '00000000-0000-0000-0000-000000000002',
@@ -32,6 +33,7 @@ export const vms: Vm[] = [
 		vcpus: 1,
 		memory_kib: 1048576,
 		persistent: false,
-		autostart: false
+		autostart: false,
+		has_vnc: false
 	}
 ];

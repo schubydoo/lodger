@@ -150,6 +150,14 @@ describe('the console page', () => {
 		expect(rfb.instances).toHaveLength(0);
 	});
 
+	it('explains a running VM without a VNC display, and opens no socket', async () => {
+		// Like the dogfood host's real VMs: running, with a serial console only (D6).
+		show('alpha', [{ ...vms[0], has_vnc: false }]);
+		expect(screen.getByText(/has no graphical display/)).toBeInTheDocument();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(rfb.instances).toHaveLength(0);
+	});
+
 	it('says so when no VM has the name', () => {
 		show('gamma');
 		expect(screen.getByRole('alert')).toHaveTextContent('No virtual machine is called gamma');

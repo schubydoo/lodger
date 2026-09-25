@@ -3,13 +3,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import NetworkCreate from './NetworkCreate.svelte';
 import QueryHarness from '$lib/test/QueryHarness.svelte';
 import { testClient } from '$lib/test/fixtures';
-import { keys } from '$lib/api';
+import { keys, type HostBridge } from '$lib/api';
 
 const nav = vi.hoisted(() => ({ goto: vi.fn(async () => {}) }));
 vi.mock('$app/navigation', () => ({ goto: nav.goto }));
 
 function show(
-	bridges: string[] | null = ['br0', 'virbr0'],
+	bridges: HostBridge[] | null = [
+		{ name: 'br0', owner: null },
+		{ name: 'virbr0', owner: 'libvirt network default' }
+	],
 	respond: () => Response = () => new Response(JSON.stringify({ uuid: 'u1' }), { status: 201 })
 ) {
 	const fetcher = vi.fn<typeof fetch>(async () => respond());
@@ -79,6 +82,32 @@ describe('the New network form', () => {
 		await fireEvent.click(create);
 		await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
 		expect(sent(fetcher)).toEqual({ mode: 'bridge', name: 'lan', bridge: 'br0', autostart: true });
+	});
+
+	it('offers only the bridges that nothing owns, and the others on request', async () => {
+		show();
+		await fireEvent.click(screen.getByLabelText('Host bridge'));
+		const options = () =>
+			[...screen.getByLabelText('Host bridge', { selector: 'select' }).querySelectorAll('option')]
+				.map((o) => o.textContent)
+				.slice(1);
+		// libvirt's own bridge is hidden at first (D5).
+		expect(options()).toEqual(['br0']);
+		await fireEvent.click(screen.getByLabelText(/Show every bridge/));
+		expect(options()).toEqual(['br0', 'virbr0 (libvirt network default)']);
+	});
+
+	it('explains when every bridge belongs to libvirt or Docker', async () => {
+		show([
+			{ name: 'docker0', owner: 'Docker' },
+			{ name: 'br-1a2b3c4d5e6f', owner: 'Docker' }
+		]);
+		await fireEvent.click(screen.getByLabelText('Host bridge'));
+		expect(screen.getByRole('note')).toHaveTextContent('belongs to a libvirt network or to Docker');
+		await fireEvent.click(screen.getByLabelText(/Show every bridge/));
+		expect(screen.getByLabelText('Host bridge', { selector: 'select' })).toHaveTextContent(
+			'docker0 (Docker)'
+		);
 	});
 
 	it('explains that a host bridge must exist first when the host has none', async () => {

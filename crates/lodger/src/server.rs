@@ -1908,7 +1908,14 @@ mod tests {
         assert!(list.as_array().unwrap().iter().any(|n| n["name"] == name));
         let (status, bridges) = call(&addr, &tab, "GET", "/api/host-bridges", None).await;
         assert_eq!(status, 200);
-        assert!(bridges.is_array(), "{bridges}");
+        // The bridges are this host's own, so only the shape is fixed.
+        for bridge in bridges.as_array().expect("an array") {
+            assert!(bridge["name"].is_string(), "{bridge}");
+            assert!(
+                bridge["owner"].is_null() || bridge["owner"].is_string(),
+                "{bridge}"
+            );
+        }
 
         // Rejected before any change.
         let rejects = [
