@@ -142,8 +142,10 @@ pub fn parse_path(field: &'static str, value: &str) -> Result<String, InputError
     if parts.iter().any(|p| matches!(*p, "." | "..")) {
         return Err(InputError::PathDotSegment { field });
     }
-    // XML 1.0 cannot carry these, so a pool with such a path would get XML
-    // that libvirt cannot parse. The fuzzer found it.
+    // XML 1.0 cannot carry most C0 controls, U+FFFE, or U+FFFF, so a pool with
+    // such a path got XML that libvirt cannot parse (the fuzzer found U+0001).
+    // Tab, newline, DEL, and the C1 controls are legal XML, but no real path
+    // needs them, so every control character is refused.
     if value
         .chars()
         .any(|c| c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}'))

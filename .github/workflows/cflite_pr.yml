@@ -10,10 +10,10 @@ name: ClusterFuzzLite PR fuzzing
 on:
   pull_request:
     branches: [main]
-    # Fuzz only when fuzz-relevant code changes, and only on
-    # open/reopen/ready (not on every `synchronize` push). The nightly batch
-    # is the deep fuzzer.
-    types: [opened, reopened, ready_for_review]
+    # Fuzz only when fuzz-relevant code changes. Each push runs it again
+    # (`synchronize`), so a push that fixes a fuzz failure can turn the check
+    # green. The batch run every 2 days is the deep fuzzer.
+    types: [opened, reopened, ready_for_review, synchronize]
     paths:
       - "crates/lodger-core/**"
       - "fuzz/**"

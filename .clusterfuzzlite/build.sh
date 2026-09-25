@@ -5,6 +5,14 @@
 
 cd "$SRC/lodger"
 
+# OSS-Fuzz pins an older nightly than the workspace's rust-version, and
+# cargo-fuzz cannot pass --ignore-rust-version. lodger-core builds on that
+# nightly, so this copy of the source declares the image's version instead.
+# The MSRV job in ci.yml still checks the real minimum.
+image_rust=$(rustc --version | awk '{print $2}' | cut -d- -f1)
+sed -i "s/^rust-version = .*/rust-version = \"${image_rust}\"/" Cargo.toml
+grep -q "^rust-version = \"${image_rust}\"" Cargo.toml
+
 # `cargo fuzz build` follows OSS-Fuzz's sanitizer settings; -O builds release.
 cargo fuzz build -O
 

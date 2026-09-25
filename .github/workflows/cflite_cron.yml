@@ -1,5 +1,5 @@
 # ClusterFuzzLite: the weekly corpus PRUNE + COVERAGE report (maintenance
-# for the daily cflite_batch). Prune minimizes the persisted corpus (it drops
+# for cflite_batch, which runs every 2 days). Prune minimizes the persisted corpus (it drops
 # inputs that add no coverage). Coverage replays the whole corpus and writes
 # an HTML line-coverage report, which shows which parser code the fuzzers
 # reach (0% means a target is owed). The corpus repo is private, so GitHub
