@@ -830,7 +830,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "lodger"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "axum",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "lodger-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "serde",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "lodger-virt"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lodger-core",
  "tempfile",
