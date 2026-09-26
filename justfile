@@ -1,7 +1,7 @@
 # Lodger task runner. Run `just --list` to see every recipe.
 # Recipes marked "not ready" get their real commands in later tasks.
 
-# Install the toolchains and system packages, then build (Debian 13, Ubuntu 24.04)
+# Install the toolchains and system packages, then build (Debian 13, Ubuntu 24.04 or 26.04)
 setup:
     scripts/bootstrap.sh
 
