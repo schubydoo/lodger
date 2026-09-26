@@ -9,7 +9,8 @@ issue.
 
 ## Set up a development machine
 
-On Debian 13 or Ubuntu 24.04, run the bootstrap script from the repository:
+On Debian 13, Ubuntu 24.04, or Ubuntu 26.04, run the bootstrap script from the
+repository:
 
 ```sh
 scripts/bootstrap.sh
@@ -17,8 +18,8 @@ scripts/bootstrap.sh
 
 It installs the system packages, the Rust toolchain of `rust-toolchain.toml`, Node
 from `.node-version`, and pnpm. Then it builds the web app and the debug server. A
-weekly CI job runs it in a clean Ubuntu 24.04 container, in under 15 minutes. The
-repository also has a devcontainer that runs the same script.
+weekly CI job runs it in clean Ubuntu 24.04 and 26.04 containers, in under 15
+minutes. The repository also has a devcontainer that runs the same script.
 
 On another system, install these by hand:
 
