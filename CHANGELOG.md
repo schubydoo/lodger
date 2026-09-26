@@ -5,6 +5,29 @@ All notable changes to Lodger are documented here. This file is generated from
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 0.1.1 (2026-09-26)
+
+### Features
+
+- Serve HTTPS without a reverse proxy. Set `tls_cert` and `tls_key` in `config.toml`, and Lodger serves HTTPS on its `listen` address, so a browser on the LAN can log in. A certificate or key that cannot be used stops the start, and Lodger never falls back to plain HTTP. `lodger doctor` checks the pair and fails 30 days before the certificate expires. ([#60](https://github.com/schubydoo/lodger/pull/60))
+- Add `install.sh`: `curl -fsSL https://raw.githubusercontent.com/schubydoo/lodger/main/install.sh | sudo bash` downloads the latest release, verifies its SHA-256 and, if cosign is installed, the cosign signature of `checksums.txt`, and runs `lodger install`. A changed archive, or with cosign a bad or missing signature, stops it before anything is installed. Other arguments go to `lodger install`, for example `sudo bash -s -- --self-signed <ip>`. ([#67](https://github.com/schubydoo/lodger/pull/67))
+- Add `sudo lodger install --self-signed <ip-or-name>`, which makes a self-signed TLS certificate for that address or host name, keeps its key readable only by root and the lodger user, turns on HTTPS in `config.toml`, and prints the SHA-256 fingerprint to compare with the one that the browser shows. It never replaces a certificate that the configuration already names. ([#62](https://github.com/schubydoo/lodger/pull/62))
+- `lodger serve` now refuses to start on an address that is not loopback without TLS, because passwords would cross the network in clear text: set `tls_cert` and `tls_key`, list a reverse proxy with TLS in `trusted_proxies`, or set `allow_plain_http = true` in `config.toml` for a TLS proxy that Lodger does not trust for client addresses. ([#71](https://github.com/schubydoo/lodger/pull/71))
+- Add the storage volumes API: `GET` and `POST /api/pools/{id}/volumes` list and create qcow2 and raw volumes in any running pool, and `DELETE /api/pools/{id}/volumes/{name}` deletes a volume unless a VM uses it, in which case the answer names the VMs. A duplicate name, a bad name, or a size outside 1 MiB to 1 PiB fails before any change. ([#63](https://github.com/schubydoo/lodger/pull/63))
+- Show the volumes of a running pool on its page, with the format, the size, the space on disk, and the VMs and qcow2 overlays that use each one. The page creates qcow2 and raw volumes, and it deletes a volume after its name is typed, unless something uses it. ([#64](https://github.com/schubydoo/lodger/pull/64))
+
+### Fixes
+
+- Send `Strict-Transport-Security` on HTTPS answers, name `charset=utf-8` on every text asset, and clear the cached data in the browser when a session expires, not only on logout. ([#68](https://github.com/schubydoo/lodger/pull/68))
+- Publish the documentation site at https://schubydoo.github.io/lodger/, with pages for installation, upgrades, reverse proxies, AppArmor, and security. ([#77](https://github.com/schubydoo/lodger/pull/77))
+- Removing an NFS pool that Lodger mounted in its own folder also removes that folder when it is empty, the New network form offers only the host bridges that no libvirt network or Docker owns (with an option to show every bridge), and a VM without a VNC display shows no Console link and explains why on its console page. ([#80](https://github.com/schubydoo/lodger/pull/80))
+- The web app keeps password managers out of pool, network, and confirmation fields, shows "1.0 TiB" instead of "1 TiB" for a size just over a whole unit, opens a new pool or network without a loading flash, no longer asks for a deleted pool or network again, and has its own icon. ([#79](https://github.com/schubydoo/lodger/pull/79))
+- A pool path or an NFS export with a control character now fails with a clear message, instead of an error from libvirt, which cannot parse the XML that such a path makes. ([#78](https://github.com/schubydoo/lodger/pull/78))
+- On a pool's page, the Volumes section now comes before the Remove section, so Remove is the last thing on the page. ([#73](https://github.com/schubydoo/lodger/pull/73))
+- Document reverse proxy setups for nginx, Caddy, and Nginx Proxy Manager in `docs/reverse-proxy.md`, with the nginx and Caddy configurations in `docs/proxy/` tested in CI. ([#75](https://github.com/schubydoo/lodger/pull/75))
+- Publish the threat model and the ASVS 5.0 Level 1 checklist under `docs/security/`, and add the time frames for dependency fixes to `SECURITY.md`. ([#70](https://github.com/schubydoo/lodger/pull/70))
+- A login now ends the session that the browser had before, a password change gives the browser a new session, and links to a VM, pool, or network work when its name holds `#`, `?`, `%`, or a space. ([#69](https://github.com/schubydoo/lodger/pull/69))
+
 ## 0.1.0 (2026-09-24)
 
 ### Features
