@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Sets up a Lodger development machine on Debian 13 or Ubuntu 24.04 and builds
-# the project (PRD F14). Run it from the repository, as a user with sudo, or as
-# root in a container:
+# Sets up a Lodger development machine on Debian 13, Ubuntu 24.04, or Ubuntu
+# 26.04 and builds the project (PRD F14). Run it from the repository, as a user
+# with sudo, or as root in a container:
 #
 #   scripts/bootstrap.sh
 #
@@ -23,7 +23,7 @@ if [ "$(id -u)" != 0 ]; then
   sudo=sudo
 fi
 command -v apt-get >/dev/null \
-  || die "this script supports Debian 13 and Ubuntu 24.04. On another system, install the packages that CONTRIBUTING.md lists."
+  || die "this script supports Debian 13, Ubuntu 24.04, and Ubuntu 26.04. On another system, install the packages that CONTRIBUTING.md lists."
 
 info "installing the system packages…"
 $sudo apt-get update -qq
