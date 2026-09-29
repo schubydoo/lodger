@@ -41,7 +41,7 @@
 		"@types/node": "24.13.6",
 		"@vitest/coverage-v8": "5.0.1",
 		"bits-ui": "2.19.2",
-		"cn": "0.3.2",
+		"cn": "0.4.0",
 		"eslint": "10.11.0",
 		"eslint-config-prettier": "10.1.8",
 		"eslint-plugin-svelte": "3.23.0",
