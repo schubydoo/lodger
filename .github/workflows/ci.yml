@@ -99,7 +99,7 @@ jobs:
           rustflags: ""
       # nextest instead of `cargo test`: the same gate, plus a junit.xml (the ci
       # profile in .config/nextest.toml) for Codecov Test Analytics later.
-      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: cargo-nextest
       - name: Test (nextest)
@@ -132,7 +132,7 @@ jobs:
         with:
           components: llvm-tools-preview
           rustflags: ""
-      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: cargo-llvm-cov
       # Enforce the line floor and emit lcov. cargo-llvm-cov writes lcov.info before
@@ -169,7 +169,7 @@ jobs:
           path: ~/.cargo/git/db
           key: cargo-git-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-git-
-      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: cargo-audit,cargo-deny
       - name: Audit
@@ -221,7 +221,7 @@ jobs:
           path: ~/.cargo/git/db
           key: cargo-git-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-git-
-      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: cargo-about@0.9.2
       - name: Generate the Rust notices
@@ -292,7 +292,7 @@ jobs:
       - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
       # The web build needs the Rust part of the notices, like the web job.
-      - uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12 # v2.87.18
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: cargo-about@0.9.2
       - name: Generate the Rust notices
