@@ -1912,7 +1912,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "virt"
 version = "0.4.3"
-source = "git+https://gitlab.com/libvirt/libvirt-rust.git?rev=0bd0cbffce4dd914e76d74e4de480bf95fabdc98#0bd0cbffce4dd914e76d74e4de480bf95fabdc98"
+source = "git+https://gitlab.com/libvirt/libvirt-rust.git?rev=19390f22fe8717eaf79d17c65f40636058e46b9d#19390f22fe8717eaf79d17c65f40636058e46b9d"
 dependencies = [
  "libc",
  "uuid",
@@ -1922,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "virt-sys"
 version = "0.3.2"
-source = "git+https://gitlab.com/libvirt/libvirt-rust.git?rev=0bd0cbffce4dd914e76d74e4de480bf95fabdc98#0bd0cbffce4dd914e76d74e4de480bf95fabdc98"
+source = "git+https://gitlab.com/libvirt/libvirt-rust.git?rev=19390f22fe8717eaf79d17c65f40636058e46b9d#19390f22fe8717eaf79d17c65f40636058e46b9d"
 dependencies = [
  "libc",
  "pkg-config",
