@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # renovate: the image pins of this test.
-NGINX_IMAGE=nginx:1.30.5@sha256:b972f831f200b19ef0767938224f9711e74cd783718738cd7405d5cabf75c442
+NGINX_IMAGE=nginx:1.30.5@sha256:0623fd2455fb2bb0bc2ba7038817adcf7805d0790f78af91de33389d50774385
 CADDY_IMAGE=caddy:2.11.4@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
 CURL_IMAGE=curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
 
