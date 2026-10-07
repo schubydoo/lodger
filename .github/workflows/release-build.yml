@@ -59,7 +59,7 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
       # The Rust part of /third-party-notices.txt, like the web job in ci.yml.
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-about@0.9.2
       - name: Generate the Rust notices
