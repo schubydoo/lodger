@@ -12,9 +12,11 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: pr-title-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No `concurrency` block, on purpose. Renovate opens a PR and edits it within
+# seconds, and a cancelled run stays on the head commit as a `cancelled` check
+# run. Renovate's own automerge reads that as pending, with no time limit, even
+# next to a later green run. The runs take seconds, so they all finish, and the
+# action reads the current title from the API (not the event payload).
 
 jobs:
   validate:
