@@ -52,11 +52,9 @@ jobs:
               const { data: pr } = await github.rest.pulls.get({
                 owner, repo, pull_number: context.payload.pull_request.number,
               });
-              const labels = (pr.labels || []).map(l => l.name);
-              if (labels.includes('no-changelog')) {
-                core.info('no-changelog label set; skipping.');
-                return;
-              }
+              // No early return for the label: a run that read the PR before the
+              // label landed can post the warning, and this run must clear it.
+              const optedOut = (pr.labels || []).some(l => l.name === 'no-changelog');
               const files = await github.paginate(github.rest.pulls.listFiles, {
                 owner, repo, pull_number: pr.number, per_page: 100,
               });
@@ -70,7 +68,7 @@ jobs:
               });
               const existing = comments.find(c => (c.body || '').includes(marker));
 
-              if (touchesCode && !hasChangeset) {
+              if (touchesCode && !hasChangeset && !optedOut) {
                 const body = [
                   marker,
                   '⚠️ **No changeset found.** This PR changes product code but adds no `.changeset/*.md` fragment.',
@@ -92,7 +90,9 @@ jobs:
               } else if (existing) {
                 await github.rest.issues.updateComment({
                   owner, repo, comment_id: existing.id,
-                  body: `${marker}\n✅ Changeset present (or no code change) — thanks!`,
+                  body: optedOut
+                    ? `${marker}\n✅ The \`no-changelog\` label is set — no changeset needed.`
+                    : `${marker}\n✅ Changeset present (or no code change) — thanks!`,
                 });
               }
             } catch (err) {
