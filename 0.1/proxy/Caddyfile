@@ -1,0 +1,19 @@
+# Lodger behind Caddy. Change the site name and the reverse_proxy address to
+# yours. scripts/proxy-smoke.sh tests this file in CI, with only the port and
+# the reverse_proxy address changed.
+lodger.example.lan {
+	# A certificate from Caddy's own local authority, for a LAN name. For a
+	# public name, remove this line: Caddy then gets a certificate itself.
+	tls internal
+
+	# Lodger on the same host, on its default loopback address. For Lodger
+	# on a Docker bridge address, write that address here. Caddy handles the
+	# WebSocket upgrade on its own.
+	reverse_proxy 127.0.0.1:8460 {
+		# Lodger reads the client address from X-Real-IP, but only when the
+		# request comes from an address in its trusted_proxies. Caddy does
+		# not set this header, and it passes on the one that a client sends,
+		# so a client could choose its own address. This line replaces it.
+		header_up X-Real-IP {remote_host}
+	}
+}
