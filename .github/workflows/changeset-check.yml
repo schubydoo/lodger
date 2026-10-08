@@ -17,9 +17,11 @@ permissions:
   contents: read
   pull-requests: write # post/update the advisory sticky comment
 
-concurrency:
-  group: changeset-check-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# No `concurrency` block, on purpose. Renovate opens a PR and labels it within
+# seconds, and a cancelled run stays on the head commit as a `cancelled` check
+# run. Renovate's own automerge reads that as pending, with no time limit. The
+# runs take seconds, so they all finish, and each one reads the PR's current
+# labels (not the event payload), so the finishing order does not matter.
 
 jobs:
   changeset:
@@ -45,9 +47,11 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request;
             const marker = '<!-- changeset-check -->';
             try {
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: context.payload.pull_request.number,
+              });
               const labels = (pr.labels || []).map(l => l.name);
               if (labels.includes('no-changelog')) {
                 core.info('no-changelog label set; skipping.');
