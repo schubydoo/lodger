@@ -4,6 +4,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { asset, resolve } from '$app/paths';
+	import type { AssetPath } from '$app/types';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
@@ -132,9 +133,10 @@
 </main>
 <footer class="mx-auto max-w-6xl border-t px-4 py-4 text-xs text-muted-foreground">
 	<!-- A static file, not a route: data-sveltekit-reload makes the browser
-	     load it instead of the client router. -->
+	     load it instead of the client router. The build writes the file
+	     (notices.ts), so it is not in `static/` and AssetPath does not list it. -->
 	<a
-		href={asset('/third-party-notices.txt')}
+		href={asset('third-party-notices.txt' as AssetPath)}
 		data-sveltekit-reload
 		class="rounded-sm underline underline-offset-4 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
 	>
