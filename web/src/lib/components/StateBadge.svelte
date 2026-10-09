@@ -8,9 +8,9 @@
 		IconPlayerPlay,
 		IconPlayerStop
 	} from '@tabler/icons-svelte';
-	import type { VmState } from '$lib/api';
-	import { stateLook, type StateIcon } from '$lib/vm-state';
-	import { cn } from '$lib/utils';
+	import type { VmState } from '#lib/api.js';
+	import { stateLook, type StateIcon } from '#lib/vm-state.js';
+	import { cn } from '#lib/utils.js';
 
 	let { state }: { state: VmState } = $props();
 

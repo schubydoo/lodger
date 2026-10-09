@@ -7,11 +7,11 @@
      so and offers Force off. -->
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import { noAutofill } from '$lib/no-autofill';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { ApiError, keys, vmAction, type Session, type Vm, type VmAction } from '$lib/api';
+	import { noAutofill } from '#lib/no-autofill.js';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { ApiError, keys, vmAction, type Session, type Vm, type VmAction } from '#lib/api.js';
 
 	let { vm }: { vm: Vm } = $props();
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import Problem from './Problem.svelte';
-import { ApiError } from '$lib/api';
+import { ApiError } from '#lib/api.js';
 
 const getfd = new ApiError(
 	502,

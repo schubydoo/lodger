@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { vanishing } from '$lib/vanishing.svelte';
+	import { vanishing } from '#lib/vanishing.svelte.js';
 	import { createQuery } from '@tanstack/svelte-query';
-	import PoolManage from '$lib/components/PoolManage.svelte';
-	import PoolVolumes from '$lib/components/PoolVolumes.svelte';
-	import { fetchPool, fetchPools, formatBytes, keys } from '$lib/api';
+	import PoolManage from '#lib/components/PoolManage.svelte';
+	import PoolVolumes from '#lib/components/PoolVolumes.svelte';
+	import { fetchPool, fetchPools, formatBytes, keys } from '#lib/api.js';
 
 	const name = $derived(page.params.name ?? '');
 	const pools = createQuery(() => ({ queryKey: keys.pools, queryFn: () => fetchPools() }));

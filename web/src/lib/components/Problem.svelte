@@ -2,7 +2,7 @@
      its fix, and the commands of the fix, which the user runs on the host
      (PRD R10). An unknown error shows only its own text. -->
 <script lang="ts">
-	import { explanationOf, problemText } from '$lib/api';
+	import { explanationOf, problemText } from '#lib/api.js';
 
 	let { error, class: className = '' }: { error: unknown; class?: string } = $props();
 

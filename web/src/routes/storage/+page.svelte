@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { createQuery } from '@tanstack/svelte-query';
-	import * as Table from '$lib/components/ui/table';
-	import PoolCreate from '$lib/components/PoolCreate.svelte';
-	import { fetchPools, formatBytes, keys } from '$lib/api';
+	import * as Table from '#lib/components/ui/table/index.js';
+	import PoolCreate from '#lib/components/PoolCreate.svelte';
+	import { fetchPools, formatBytes, keys } from '#lib/api.js';
 
 	const pools = createQuery(() => ({ queryKey: keys.pools, queryFn: () => fetchPools() }));
 </script>

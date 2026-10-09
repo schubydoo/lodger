@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
+	import * as Card from '#lib/components/ui/card/index.js';
+	import * as Table from '#lib/components/ui/table/index.js';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
 	import {
 		ApiError,
 		fetchAccounts,
@@ -13,7 +13,7 @@
 		send,
 		type Account,
 		type Session
-	} from '$lib/api';
+	} from '#lib/api.js';
 
 	const client = useQueryClient();
 	const accounts = createQuery(() => ({ queryKey: keys.accounts, queryFn: () => fetchAccounts() }));

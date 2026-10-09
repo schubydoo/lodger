@@ -3,13 +3,13 @@
      network's name. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { vanishing } from '$lib/vanishing.svelte';
-	import { noAutofill } from '$lib/no-autofill';
+	import { vanishing } from '#lib/vanishing.svelte.js';
+	import { noAutofill } from '#lib/no-autofill.js';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
 	import {
 		ApiError,
 		changeNetwork,
@@ -17,7 +17,7 @@
 		keys,
 		type NetworkDetail,
 		type Session
-	} from '$lib/api';
+	} from '#lib/api.js';
 
 	let { network }: { network: NetworkDetail } = $props();
 

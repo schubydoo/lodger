@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient, vms } from '$lib/test/fixtures';
-import { keys } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient, vms } from '#lib/test/fixtures.js';
+import { keys } from '#lib/api.js';
 
 // A stand-in for noVNC's RFB class that records what the page does.
 const rfb = vi.hoisted(() => ({
@@ -44,8 +44,8 @@ vi.mock('@novnc/novnc', () => ({
 
 // Each console socket gets a ticket first. The ticket client has its own tests.
 const ticket = vi.hoisted(() => ({ next: async (): Promise<string> => 'tk' }));
-vi.mock('$lib/session', async (actual) => ({
-	...(await actual<typeof import('$lib/session')>()),
+vi.mock('#lib/session.js', async (actual) => ({
+	...(await actual<typeof import('#lib/session.js')>()),
 	nextTicket: () => ticket.next()
 }));
 

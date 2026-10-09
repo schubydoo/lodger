@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { createQuery } from '@tanstack/svelte-query';
-	import * as Table from '$lib/components/ui/table';
-	import NetworkCreate from '$lib/components/NetworkCreate.svelte';
-	import { fetchNetworks, keys } from '$lib/api';
+	import * as Table from '#lib/components/ui/table/index.js';
+	import NetworkCreate from '#lib/components/NetworkCreate.svelte';
+	import { fetchNetworks, keys } from '#lib/api.js';
 
 	const networks = createQuery(() => ({ queryKey: keys.networks, queryFn: () => fetchNetworks() }));
 </script>

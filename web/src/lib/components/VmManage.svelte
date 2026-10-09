@@ -5,14 +5,14 @@
      shows what happened to each disk. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { noAutofill } from '$lib/no-autofill';
+	import { noAutofill } from '#lib/no-autofill.js';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { ApiError, deleteVm, keys, setAutostart, type Session, type Vm } from '$lib/api';
-	import { lastDeletion } from '$lib/deletion.svelte';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { ApiError, deleteVm, keys, setAutostart, type Session, type Vm } from '#lib/api.js';
+	import { lastDeletion } from '#lib/deletion.svelte.js';
 
 	let { vm }: { vm: Vm } = $props();
 

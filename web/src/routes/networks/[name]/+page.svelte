@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { vanishing } from '$lib/vanishing.svelte';
+	import { vanishing } from '#lib/vanishing.svelte.js';
 	import { createQuery } from '@tanstack/svelte-query';
-	import NetworkManage from '$lib/components/NetworkManage.svelte';
-	import { fetchNetwork, fetchNetworks, keys } from '$lib/api';
+	import NetworkManage from '#lib/components/NetworkManage.svelte';
+	import { fetchNetwork, fetchNetworks, keys } from '#lib/api.js';
 
 	const name = $derived(page.params.name ?? '');
 	const networks = createQuery(() => ({ queryKey: keys.networks, queryFn: () => fetchNetworks() }));

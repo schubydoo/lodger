@@ -2,10 +2,10 @@ import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys, type Pool, type PoolDetail } from '$lib/api';
-import { vanishing } from '$lib/vanishing.svelte';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys, type Pool, type PoolDetail } from '#lib/api.js';
+import { vanishing } from '#lib/vanishing.svelte.js';
 
 const params = vi.hoisted(() => ({ name: 'nas' }));
 vi.mock('$app/state', () => ({ page: { params } }));

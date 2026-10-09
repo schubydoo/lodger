@@ -1,6 +1,6 @@
 // Test data shaped like the API answers (crates/lodger/src/api.rs).
 import { QueryClient } from '@tanstack/svelte-query';
-import type { Host, Vm } from '$lib/api';
+import type { Host, Vm } from '#lib/api.js';
 
 /** A client that never refetches on its own, so a test sees only what it set. */
 export function testClient(): QueryClient {

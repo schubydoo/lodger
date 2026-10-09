@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import StateBadge from './StateBadge.svelte';
-import type { VmState } from '$lib/api';
+import type { VmState } from '#lib/api.js';
 
 describe('StateBadge', () => {
 	it('shows the state as text and an icon that screen readers skip', () => {

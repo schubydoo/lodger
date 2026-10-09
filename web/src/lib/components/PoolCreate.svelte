@@ -5,14 +5,14 @@
      libvirt defines, builds, and starts the pool in one call. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { noAutofill } from '$lib/no-autofill';
+	import { noAutofill } from '#lib/no-autofill.js';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import { ApiError, createPool, keys, type NewPool, type Session, fetchPool } from '$lib/api';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
+	import { ApiError, createPool, keys, type NewPool, type Session, fetchPool } from '#lib/api.js';
 
 	const client = useQueryClient();
 

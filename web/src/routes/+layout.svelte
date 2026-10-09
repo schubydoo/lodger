@@ -1,8 +1,8 @@
 <script lang="ts">
 	import './layout.css';
 	import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
-	import AppShell from '$lib/components/AppShell.svelte';
-	import { ApiError, keys } from '$lib/api';
+	import AppShell from '#lib/components/AppShell.svelte';
+	import { ApiError, keys } from '#lib/api.js';
 
 	let { children } = $props();
 

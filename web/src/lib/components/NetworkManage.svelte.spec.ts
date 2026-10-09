@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import NetworkManage from './NetworkManage.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys, type NetworkDetail } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys, type NetworkDetail } from '#lib/api.js';
 
 const nav = vi.hoisted(() => ({ goto: vi.fn(async () => {}) }));
 vi.mock('$app/navigation', () => ({ goto: nav.goto }));

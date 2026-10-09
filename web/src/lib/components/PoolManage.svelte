@@ -5,15 +5,22 @@
      stays last. -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { vanishing } from '$lib/vanishing.svelte';
-	import { noAutofill } from '$lib/no-autofill';
+	import { vanishing } from '#lib/vanishing.svelte.js';
+	import { noAutofill } from '#lib/no-autofill.js';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { ApiError, changePool, keys, removePool, type PoolDetail, type Session } from '$lib/api';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import {
+		ApiError,
+		changePool,
+		keys,
+		removePool,
+		type PoolDetail,
+		type Session
+	} from '#lib/api.js';
 
 	let { pool, children }: { pool: PoolDetail; children?: Snippet } = $props();
 
