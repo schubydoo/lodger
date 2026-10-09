@@ -190,13 +190,28 @@ mod tests {
 
     #[test]
     fn a_refresh_reads_the_object_again() {
+        // The test's own pool and network: other tests change the test
+        // driver's `default-pool` in this process.
         let conn = conn();
-        let mut inv = Inventory::load(&conn).unwrap();
-        let pool = conn.lookup_storage_pool_by_name("default-pool").unwrap();
-        let net = conn.lookup_network_by_name("default").unwrap();
+        let pool = conn
+            .define_storage_pool_xml(
+                "<pool type='dir'><name>cache-refresh</name>\
+                 <target><path>/cache-refresh</path></target></pool>",
+                0,
+            )
+            .unwrap();
+        let net = conn
+            .define_network_xml("<network><name>cache-refresh</name></network>")
+            .unwrap();
         let (pool_id, net_id) = (pool.uuid().unwrap(), net.uuid().unwrap());
 
-        let before = inv.clone();
+        let mut inv = Inventory::load(&conn).unwrap();
+        let before = (
+            inv.pools[&pool_id].autostart,
+            inv.networks[&net_id].autostart,
+        );
+        pool.set_autostart(true).unwrap();
+        net.set_autostart(true).unwrap();
         let pool_event = Event::Pool {
             id: pool_id,
             event: 0,
@@ -207,8 +222,14 @@ mod tests {
         };
         inv.apply(refresh(&conn, &pool_event).unwrap().unwrap());
         inv.apply(refresh(&conn, &net_event).unwrap().unwrap());
-        assert_eq!(inv.pools[&pool_id], before.pools[&pool_id]);
-        assert_eq!(inv.networks[&net_id], before.networks[&net_id]);
+        let after = (
+            inv.pools[&pool_id].autostart,
+            inv.networks[&net_id].autostart,
+        );
+        pool.undefine().unwrap();
+        net.undefine().unwrap();
+        assert_eq!(before, (false, false));
+        assert_eq!(after, (true, true));
     }
 
     #[test]
