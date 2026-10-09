@@ -5,12 +5,12 @@
      this list and the pool's sizes. -->
 <script lang="ts">
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { noAutofill } from '$lib/no-autofill';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import * as Table from '$lib/components/ui/table';
+	import { noAutofill } from '#lib/no-autofill.js';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
+	import * as Table from '#lib/components/ui/table/index.js';
 	import {
 		ApiError,
 		createVolume,
@@ -21,7 +21,7 @@
 		type PoolDetail,
 		type Session,
 		type Volume
-	} from '$lib/api';
+	} from '#lib/api.js';
 
 	let { pool }: { pool: PoolDetail } = $props();
 

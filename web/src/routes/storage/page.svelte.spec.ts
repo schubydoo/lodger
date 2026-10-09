@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys, type Pool } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys, type Pool } from '#lib/api.js';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 

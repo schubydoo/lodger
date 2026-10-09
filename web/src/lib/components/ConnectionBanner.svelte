@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { IconPlugConnectedX } from '@tabler/icons-svelte';
-	import * as Alert from '$lib/components/ui/alert';
-	import { fetchHost, keys } from '$lib/api';
+	import * as Alert from '#lib/components/ui/alert/index.js';
+	import { fetchHost, keys } from '#lib/api.js';
 
 	/** `false` while the events socket to the Lodger server is closed. */
 	let { socketOpen }: { socketOpen: boolean } = $props();

@@ -8,11 +8,11 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { fetchSession, fetchSetupOpen, keys, send } from '$lib/api';
-	import { connectEvents, eventsUrl } from '$lib/events';
-	import { nextTicket, withTicket } from '$lib/session';
+	import ConnectionBanner from '#lib/components/ConnectionBanner.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { fetchSession, fetchSetupOpen, keys, send } from '#lib/api.js';
+	import { connectEvents, eventsUrl } from '#lib/events.js';
+	import { nextTicket, withTicket } from '#lib/session.js';
 
 	let { children }: { children: Snippet } = $props();
 

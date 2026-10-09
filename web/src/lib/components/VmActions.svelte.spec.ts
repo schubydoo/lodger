@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import VmActions from './VmActions.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient, vms } from '$lib/test/fixtures';
-import { keys, type Vm } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient, vms } from '#lib/test/fixtures.js';
+import { keys, type Vm } from '#lib/api.js';
 
 const [running, shutoff] = vms;
 

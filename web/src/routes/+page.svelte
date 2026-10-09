@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { createQuery } from '@tanstack/svelte-query';
-	import * as Card from '$lib/components/ui/card';
-	import { fetchHost, formatKib, keys } from '$lib/api';
+	import * as Card from '#lib/components/ui/card/index.js';
+	import { fetchHost, formatKib, keys } from '#lib/api.js';
 
 	const host = createQuery(() => ({ queryKey: keys.host, queryFn: () => fetchHost() }));
 </script>

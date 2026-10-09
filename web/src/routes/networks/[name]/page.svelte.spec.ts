@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys, type Network, type NetworkDetail } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys, type Network, type NetworkDetail } from '#lib/api.js';
 
 const params = vi.hoisted(() => ({ name: 'lab' }));
 vi.mock('$app/state', () => ({ page: { params } }));

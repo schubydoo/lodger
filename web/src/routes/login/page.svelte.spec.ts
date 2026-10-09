@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys } from '#lib/api.js';
 
 function answer(body: unknown, status: number) {
 	return new Response(JSON.stringify(body), { status });

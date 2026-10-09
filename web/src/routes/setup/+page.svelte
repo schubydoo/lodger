@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import { noAutofill } from '$lib/no-autofill';
-	import * as Card from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import { ApiError, keys, problemText, send, type Session } from '$lib/api';
+	import { noAutofill } from '#lib/no-autofill.js';
+	import * as Card from '#lib/components/ui/card/index.js';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
+	import { ApiError, keys, problemText, send, type Session } from '#lib/api.js';
 
 	const client = useQueryClient();
 

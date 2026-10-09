@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import AppShell from './AppShell.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { host, testClient } from '$lib/test/fixtures';
-import { keys } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { host, testClient } from '#lib/test/fixtures.js';
+import { keys } from '#lib/api.js';
 
-vi.mock('$lib/session', async (actual) => ({
-	...(await actual<typeof import('$lib/session')>()),
+vi.mock('#lib/session.js', async (actual) => ({
+	...(await actual<typeof import('#lib/session.js')>()),
 	nextTicket: vi.fn(async () => 'tk')
 }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn(async () => {}) }));

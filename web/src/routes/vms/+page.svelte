@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { createQuery } from '@tanstack/svelte-query';
-	import * as Table from '$lib/components/ui/table';
-	import StateBadge from '$lib/components/StateBadge.svelte';
-	import VmActions from '$lib/components/VmActions.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { fetchVms, formatKib, keys, skipText } from '$lib/api';
-	import { lastDeletion } from '$lib/deletion.svelte';
+	import * as Table from '#lib/components/ui/table/index.js';
+	import StateBadge from '#lib/components/StateBadge.svelte';
+	import VmActions from '#lib/components/VmActions.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { fetchVms, formatKib, keys, skipText } from '#lib/api.js';
+	import { lastDeletion } from '#lib/deletion.svelte.js';
 
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
 </script>

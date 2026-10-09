@@ -5,13 +5,13 @@
      unless the user turns it off. -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { noAutofill } from '$lib/no-autofill';
+	import { noAutofill } from '#lib/no-autofill.js';
 	import { resolve } from '$app/paths';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import Problem from '$lib/components/Problem.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
+	import Problem from '#lib/components/Problem.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import { Input } from '#lib/components/ui/input/index.js';
+	import { Label } from '#lib/components/ui/label/index.js';
 	import {
 		ApiError,
 		createNetwork,
@@ -20,7 +20,7 @@
 		type NewNetwork,
 		type Session,
 		fetchNetwork
-	} from '$lib/api';
+	} from '#lib/api.js';
 
 	const client = useQueryClient();
 	const bridges = createQuery(() => ({

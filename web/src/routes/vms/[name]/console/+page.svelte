@@ -3,9 +3,9 @@
 	import { page } from '$app/state';
 	import { createQuery } from '@tanstack/svelte-query';
 	import RFB from '@novnc/novnc';
-	import { fetchVms, keys } from '$lib/api';
-	import { statusText, vncUrl, type ConsoleStatus } from '$lib/console';
-	import { nextTicket, withTicket } from '$lib/session';
+	import { fetchVms, keys } from '#lib/api.js';
+	import { statusText, vncUrl, type ConsoleStatus } from '#lib/console.js';
+	import { nextTicket, withTicket } from '#lib/session.js';
 
 	const name = $derived(page.params.name ?? '');
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));

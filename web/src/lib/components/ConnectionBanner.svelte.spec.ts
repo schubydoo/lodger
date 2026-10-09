@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import ConnectionBanner from './ConnectionBanner.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { host, testClient } from '$lib/test/fixtures';
-import { keys, type Host } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { host, testClient } from '#lib/test/fixtures.js';
+import { keys, type Host } from '#lib/api.js';
 
 function show(data: Host, socketOpen = true) {
 	const client = testClient();

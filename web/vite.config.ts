@@ -11,11 +11,6 @@ export default defineConfig({
 	plugins: [
 		tailwindcss(),
 		sveltekit({
-			// SvelteKit 3 removed the built-in `$lib` alias. Its replacement, the
-			// `#lib` subpath import, needs a file extension on every import, and
-			// the shadcn-svelte components import without one. This option is
-			// deprecated, so move to `#lib` before SvelteKit removes it.
-			alias: { $lib: 'src/lib' },
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 				runes: ({ filename }) =>

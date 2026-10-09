@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient, vms } from '$lib/test/fixtures';
-import { keys } from '$lib/api';
-import { lastDeletion } from '$lib/deletion.svelte';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient, vms } from '#lib/test/fixtures.js';
+import { keys } from '#lib/api.js';
+import { lastDeletion } from '#lib/deletion.svelte.js';
 
 function show(setup: (client: ReturnType<typeof testClient>) => void = () => {}) {
 	const client = testClient();

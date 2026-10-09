@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import PoolVolumes from './PoolVolumes.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient } from '$lib/test/fixtures';
-import { keys, type PoolDetail, type Volume } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient } from '#lib/test/fixtures.js';
+import { keys, type PoolDetail, type Volume } from '#lib/api.js';
 
 const pool: PoolDetail = {
 	uuid: '00000000-0000-0000-0000-00000000000a',

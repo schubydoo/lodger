@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
 import Layout from './+layout.svelte';
-import { host } from '$lib/test/fixtures';
+import { host } from '#lib/test/fixtures.js';
 
 /** A WebSocket stand-in that records each socket the layout opens. */
 class FakeSocket {
@@ -21,8 +21,8 @@ class FakeSocket {
 }
 
 // Each socket gets a ticket first. The ticket client has its own tests.
-vi.mock('$lib/session', async (actual) => ({
-	...(await actual<typeof import('$lib/session')>()),
+vi.mock('#lib/session.js', async (actual) => ({
+	...(await actual<typeof import('#lib/session.js')>()),
 	nextTicket: vi.fn(async () => 'tk')
 }));
 

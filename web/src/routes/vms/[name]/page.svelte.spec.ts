@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Page from './+page.svelte';
-import QueryHarness from '$lib/test/QueryHarness.svelte';
-import { testClient, vms } from '$lib/test/fixtures';
-import { keys, type VmStats } from '$lib/api';
+import QueryHarness from '#lib/test/QueryHarness.svelte';
+import { testClient, vms } from '#lib/test/fixtures.js';
+import { keys, type VmStats } from '#lib/api.js';
 
 const params = vi.hoisted(() => ({ name: 'alpha' }));
 vi.mock('$app/state', () => ({ page: { params } }));
@@ -11,7 +11,7 @@ vi.mock('$app/state', () => ({ page: { params } }));
 // The page asks for live stats while it is open. The spy records the
 // requests and their releases.
 const interest = vi.hoisted(() => ({ wanted: 0, released: 0 }));
-vi.mock('$lib/events', () => ({
+vi.mock('#lib/events.js', () => ({
 	wantStats: () => {
 		interest.wanted += 1;
 		return () => (interest.released += 1);

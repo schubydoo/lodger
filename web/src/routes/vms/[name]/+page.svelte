@@ -2,11 +2,11 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import StateBadge from '$lib/components/StateBadge.svelte';
-	import VmActions from '$lib/components/VmActions.svelte';
-	import VmManage from '$lib/components/VmManage.svelte';
-	import { fetchVms, formatKib, formatRate, keys, type VmStats } from '$lib/api';
-	import { wantStats } from '$lib/events';
+	import StateBadge from '#lib/components/StateBadge.svelte';
+	import VmActions from '#lib/components/VmActions.svelte';
+	import VmManage from '#lib/components/VmManage.svelte';
+	import { fetchVms, formatKib, formatRate, keys, type VmStats } from '#lib/api.js';
+	import { wantStats } from '#lib/events.js';
 
 	const name = $derived(page.params.name ?? '');
 	const vms = createQuery(() => ({ queryKey: keys.vms, queryFn: () => fetchVms() }));
