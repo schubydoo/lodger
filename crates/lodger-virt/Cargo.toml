@@ -16,7 +16,7 @@ virt.workspace = true
 
 [dev-dependencies]
 tempfile = "=3.27.0"
-tokio = { version = "=1.53.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "=1.53.2", features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
