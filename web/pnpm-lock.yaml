@@ -239,8 +239,8 @@ importers:
         specifier: 17.13.0
         version: 17.13.0
       jsdom:
-        specifier: 30.1.1
-        version: 30.1.1
+        specifier: 30.1.2
+        version: 30.1.2
       prettier:
         specifier: 3.9.9
         version: 3.9.9
@@ -288,7 +288,7 @@ importers:
         version: 8.3.2(@types/node@24.19.1)(jiti@2.7.0)
       vitest:
         specifier: 5.0.3
-        version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
+        version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.2)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
 
 packages:
 
@@ -1278,9 +1278,9 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
-  data-urls@7.0.0:
-    resolution: {integrity: sha512-23XHcCF+coGYevirZceTVD7NdJOqVn+49IHyxgszm+JIiHLoB2TkmPtsYkNWT1pvRSGkc35L6NHs0yHkN2SumA==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
+  data-urls@8.0.0:
+    resolution: {integrity: sha512-JQUCCK+/CAGbGGx618PlFZMXH81Jtj7t73CHv9dd/zVWvxgGT2zLFRjnKb+Ng46GIwcy+f7f88qd4duqllK+WQ==}
+    engines: {node: ^22.14.0 || >=24.0.0}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -1536,8 +1536,8 @@ packages:
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
-  jsdom@30.1.1:
-    resolution: {integrity: sha512-FahmoPK5vbPc+jxV1iErMHmAZypCZ942NHF4+qqaWAuvaKKTBZxawnmAtrbGWLU7MtlxfqIP0qw6aSI+aWGtLg==}
+  jsdom@30.1.2:
+    resolution: {integrity: sha512-0FFE/jE1rppmVfUrJUgxqXjcwolZYIGtAgj1pTussMhNZxIxi7W/PvfWaMNroGi2B36X1IKHbexpZ9DhkoOPiQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       canvas: ^3.2.3
@@ -2135,10 +2135,6 @@ packages:
     resolution: {integrity: sha512-exgYmnmL/sJpR3upZfXG5PoatXQii55xAiXGXzY+sROLZ/Y+SLcp9PgJNI9Vz37HpQ74WvDcLT8eqm+kV3FzrA==}
     engines: {node: '>=16'}
 
-  tr46@6.0.0:
-    resolution: {integrity: sha512-bLVMLPtstlZ4iMQHpFHTR7GAGj2jxi8Dg0s2h2MafAE4uSWF98FC/3MomU51iQAMf8/qDUbKWf5GxuvvVcXEhw==}
-    engines: {node: '>=20'}
-
   tr46@7.0.0:
     resolution: {integrity: sha512-BcDSDW+SIGWVOns1Zm6Yg91q9AEj7eaID0QDY9oIqJD1A8dscNwMcl9Sms2DeuWCNov1X0/oXanHGYQBSLwZsg==}
     engines: {node: ^22.14.0 || >=24.0.0}
@@ -2305,10 +2301,6 @@ packages:
   whatwg-mimetype@5.0.0:
     resolution: {integrity: sha512-sXcNcHOC51uPGF0P/D4NVtrkjSU2fNsm9iog4ZvZJsL3rjoDAzXZhkm2MWt1y+PUdggKAYVoMAIYcs78wJ51Cw==}
     engines: {node: '>=20'}
-
-  whatwg-url@16.0.1:
-    resolution: {integrity: sha512-1to4zXBxmXHV3IiSSEInrreIlu02vUOvrhxJJH5vcxYTBDAx51cqZiKdyTxlecdKNSjj8EcxGBxNf6Vg+945gw==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
   whatwg-url@17.2.0:
     resolution: {integrity: sha512-IhLIHNcBrzIixC5XXsbr4DxdjajyA5vQ5RwGZMtrUp+GbtE5Nrsge9QKau7jXrC0aTXLYGV0xiW7Tb4YS2aomw==}
@@ -2925,7 +2917,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
+      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.2)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
 
   '@testing-library/svelte-core@1.1.3(svelte@5.57.1(@typescript-eslint/types@8.71.0))':
     dependencies:
@@ -2938,7 +2930,7 @@ snapshots:
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
     optionalDependencies:
       vite: 8.3.2(@types/node@24.19.1)(jiti@2.7.0)
-      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
+      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.2)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
 
   '@testing-library/user-event@14.6.7(@testing-library/dom@10.4.2)':
     dependencies:
@@ -3064,7 +3056,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
+      vitest: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.2)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
 
   '@vitest/istanbul-lib-coverage@1.0.2': {}
 
@@ -3205,10 +3197,10 @@ snapshots:
 
   cssesc@3.0.0: {}
 
-  data-urls@7.0.0:
+  data-urls@8.0.0:
     dependencies:
       whatwg-mimetype: 5.0.0
-      whatwg-url: 16.0.1
+      whatwg-url: 17.2.0
     transitivePeerDependencies:
       - '@noble/hashes'
 
@@ -3446,7 +3438,7 @@ snapshots:
 
   js-tokens@4.0.0: {}
 
-  jsdom@30.1.1:
+  jsdom@30.1.2:
     dependencies:
       '@asamuzakjp/css-color': 7.1.3
       '@asamuzakjp/dom-selector': 9.2.4
@@ -3454,7 +3446,7 @@ snapshots:
       '@csstools/css-syntax-patches-for-csstree': 1.1.15(css-tree@3.2.1)
       '@exodus/bytes': 1.16.0
       css-tree: 3.2.1
-      data-urls: 7.0.0
+      data-urls: 8.0.0
       decimal.js: 10.6.0
       html-encoding-sniffer: 7.0.0
       is-potential-custom-element-name: 1.0.1
@@ -3981,10 +3973,6 @@ snapshots:
     dependencies:
       tldts: 7.4.16
 
-  tr46@6.0.0:
-    dependencies:
-      punycode: 2.3.1
-
   tr46@7.0.0:
     dependencies:
       punycode: 2.3.1
@@ -4051,7 +4039,7 @@ snapshots:
     optionalDependencies:
       vite: 8.3.2(@types/node@24.19.1)(jiti@2.7.0)
 
-  vitest@5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.1)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0)):
+  vitest@5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(jsdom@30.1.2)(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.3(vite@8.3.2(@types/node@24.19.1)(jiti@2.7.0))
@@ -4070,7 +4058,7 @@ snapshots:
     optionalDependencies:
       '@types/node': 24.19.1
       '@vitest/coverage-v8': 5.0.3(vitest@5.0.3)
-      jsdom: 30.1.1
+      jsdom: 30.1.2
     transitivePeerDependencies:
       - msw
 
@@ -4083,14 +4071,6 @@ snapshots:
   webpack-virtual-modules@0.6.2: {}
 
   whatwg-mimetype@5.0.0: {}
-
-  whatwg-url@16.0.1:
-    dependencies:
-      '@exodus/bytes': 1.16.0
-      tr46: 6.0.0
-      webidl-conversions: 8.0.1
-    transitivePeerDependencies:
-      - '@noble/hashes'
 
   whatwg-url@17.2.0:
     dependencies:
