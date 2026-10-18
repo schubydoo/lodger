@@ -1,0 +1,97 @@
+name: RustSec lockfile autofix
+
+# Daily: audit Cargo.lock against RustSec, and open a PR that updates each vulnerable
+# crate within its semver range (scripts/rustsec_autofix.py).
+#
+# Renovate cannot cover this. Its OSV alerts see direct dependencies only, so a crate that
+# only the lockfile pins (rustls through tokio-rustls, RUSTSEC-2026-0346 to 0349) waits for
+# the weekly lockFileMaintenance, with `audit · deny` red on every PR until then.
+#
+# The PR does not auto-merge. A person merges it.
+#
+# An advisory that needs a Cargo.toml change is never forced. The run fails instead, so the
+# scheduled-run failure notice reaches a person.
+on:
+  schedule:
+    - cron: "47 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustsec-autofix
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    name: Fix RustSec advisories in the lockfile
+    # A workflow_dispatch from another ref must not run this job, which can write.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # App token, not GITHUB_TOKEN: a PR that the default token opens does not trigger
+      # its CI.
+      - name: Mint lodger-ci App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.LODGER_CI_CLIENT_ID }}
+          private-key: ${{ secrets.LODGER_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify App token was minted
+        if: ${{ steps.app-token.outputs.token == '' }}
+        run: |
+          echo "::error::lodger-ci App token mint produced an empty token; check LODGER_CI_CLIENT_ID / LODGER_CI_APP_PRIVATE_KEY and the App installation."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-audit
+      - name: Audit and update the lockfile
+        run: python3 scripts/rustsec_autofix.py "$RUNNER_TEMP/rustsec"
+      - name: Open, update or close the autofix PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch="rustsec-autofix"
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if git diff --quiet -- Cargo.lock; then
+            echo "The lockfile has no advisory that a lockfile update can fix."
+            # An open PR means that main got the fix another way, for example a manual update.
+            if [ -n "$existing" ]; then
+              gh pr close --repo "$GITHUB_REPOSITORY" "$existing" --delete-branch \
+                --comment "Closed by rustsec-autofix.yml: \`main\` no longer has a fixable advisory."
+            fi
+            exit 0
+          fi
+          title="fix(deps): update crates for RustSec advisories"
+          git config user.name "lodger-ci[bot]"
+          git config user.email "lodger-ci[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # The script's fragment is the only new file under .changeset/.
+          git add Cargo.lock .changeset/
+          git commit -m "$title"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${branch}"
+          if [ -z "$existing" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
+          else
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$existing" \
+              --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
+          fi
+      - name: Fail on advisories that need a manifest change
+        run: |
+          set -euo pipefail
+          remaining="$(jq -r '.remaining | join(", ")' "$RUNNER_TEMP/rustsec/summary.json")"
+          if [ -n "$remaining" ]; then
+            echo "::error::not fixable from the lockfile, needs a Cargo.toml change: $remaining"
+            exit 1
+          fi
