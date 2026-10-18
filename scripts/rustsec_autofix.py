@@ -62,6 +62,7 @@ def main() -> None:
     out = pathlib.Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
 
+    original = LOCKFILE.read_text()
     before = audit()
     for name, version in sorted(
         {(v["package"]["name"], v["package"]["version"]) for v in before}
@@ -114,7 +115,12 @@ def main() -> None:
         ]
     (out / "body.md").write_text("\n".join(lines) + "\n")
 
-    if fixed:
+    if not fixed:
+        # An update can move a crate without a fix, for example when only a new major
+        # version fixes it. Without a fix there is no fragment, so the workflow's
+        # `git diff` gate must see no change.
+        LOCKFILE.write_text(original)
+    else:
         ids = sorted({r["id"] for r in fixed})
         crates = sorted({f"{r['crate']} {r['to']}" for r in fixed})
         # knope consumes every fragment at release, so the directory can be absent.
