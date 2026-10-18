@@ -5,6 +5,12 @@ All notable changes to Lodger are documented here. This file is generated from
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 0.1.2 (2026-10-18)
+
+### Security
+
+- The built-in TLS server uses rustls 0.23.46, which fixes the advisories RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and RUSTSEC-2026-0349. ([#167](https://github.com/schubydoo/lodger/pull/167))
+
 ## 0.1.1 (2026-10-08)
 
 ### Features
