@@ -5,6 +5,12 @@ All notable changes to Lodger are documented here. This file is generated from
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 0.1.3 (2026-10-21)
+
+### Security
+
+- The lockfile moves to rustls-webpki 0.103.16, which fixes RUSTSEC-2026-0382. ([#182](https://github.com/schubydoo/lodger/pull/182))
+
 ## 0.1.2 (2026-10-18)
 
 ### Security
