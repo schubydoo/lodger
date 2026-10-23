@@ -5,6 +5,12 @@ All notable changes to Lodger are documented here. This file is generated from
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 0.1.4 (2026-10-23)
+
+### Security
+
+- The lockfile moves to ctutils 0.4.5, which fixes RUSTSEC-2026-0385. ([#196](https://github.com/schubydoo/lodger/pull/196))
+
 ## 0.1.3 (2026-10-21)
 
 ### Security
