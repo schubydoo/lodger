@@ -21,7 +21,7 @@ jobs:
       issues: write
       id-token: write
       actions: read
-    uses: schubydoo/shared-workflows/.github/workflows/claude-review.yml@6b10fb0269119a5a84ab7cc563bfbf98ee59be17 # main
+    uses: schubydoo/shared-workflows/.github/workflows/claude-review.yml@5ddfea231b92a1dc134203d421fd7708edf3f611 # main
     with:
       output-style: simple-english:simple-english
       model: opus
