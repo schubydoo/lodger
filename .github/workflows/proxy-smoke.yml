@@ -39,7 +39,7 @@ concurrency:
 jobs:
   proxy:
     name: ${{ matrix.proxy }} on the ${{ matrix.layout }} network
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
