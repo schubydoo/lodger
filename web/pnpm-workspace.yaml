@@ -14,3 +14,12 @@ trustPolicyExclude:
   # Checked against the npm registry on 2026-09-22. Drop this entry when
   # svelte-check moves to chokidar 5, which is published with provenance.
   - chokidar@4.0.3
+
+# Forced versions, each with its reason.
+overrides:
+  # GHSA-mrhx-c7xc-m3w5 (high): zod below 4.6.6 can exhaust memory while it validates
+  # oversized constrained collections, and no 3.x release has the fix. The only path to zod
+  # is @codecov/bundler-plugin-core 2.0.1, which declares zod ^3.22.4 and uses it at build
+  # time to validate its own options. Drop this entry when that plugin depends on zod 4.6.6
+  # or later.
+  zod: ^4.6.6
