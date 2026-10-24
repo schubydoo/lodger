@@ -14,6 +14,8 @@ libvirt stays the source of truth for your VMs. `virsh`, `virt-manager`, and Coc
 keep working next to it. If you remove Lodger, every VM, pool, and network keeps
 working.
 
+Pass `--pilot-retry-limit <n>` to retry a failed step up to `n` times before the run exits.
+
 ## What it does today
 
 - Shows the host and every VM that libvirt knows, with live CPU and memory use.
