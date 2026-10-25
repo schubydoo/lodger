@@ -26,7 +26,7 @@ env:
 jobs:
   lint:
     name: fmt · clippy · docs · typos
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,7 +69,7 @@ jobs:
     # Prove the workspace still builds on its declared MSRV (Cargo.toml rust-version),
     # not just on the pinned toolchain. `cargo +1.95.0` overrides rust-toolchain.toml.
     name: build (MSRV 1.95)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,7 +85,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -121,7 +121,7 @@ jobs:
 
   coverage:
     name: coverage
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,7 +155,7 @@ jobs:
 
   supply-chain:
     name: audit · deny
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,7 +182,7 @@ jobs:
     # coverage, the static build, and pnpm's audits. pnpm comes from the
     # `packageManager` field in web/package.json, Node from .node-version.
     name: web · lint · check · test · build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
@@ -266,7 +266,7 @@ jobs:
     # (Task 3.11): setup, login, the VM list, lifecycle actions, and pool
     # creation, each with the keyboard alone.
     name: e2e · axe
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
@@ -324,7 +324,7 @@ jobs:
     name: ci required checks passed
     if: always()
     needs: [lint, msrv, test, coverage, supply-chain, web, e2e]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Check required jobs passed

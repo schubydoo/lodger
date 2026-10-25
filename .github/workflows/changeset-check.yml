@@ -29,7 +29,7 @@ jobs:
     if: >-
       ${{ github.event.pull_request.head.repo.full_name == github.repository
           && github.head_ref != 'release' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Optional App token for a larger API budget. Soft-fail → GITHUB_TOKEN.

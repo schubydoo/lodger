@@ -21,7 +21,7 @@ permissions:
 jobs:
   validate:
     name: conventional PR title
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       pull-requests: read
