@@ -24,7 +24,7 @@ jobs:
   # git's own error stays in the log for diagnosis; Actions masks the token.
   probe:
     name: probe the corpus repo
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
       group: ${{ github.workflow }}-probe
@@ -57,7 +57,7 @@ jobs:
     name: prune corpus
     needs: probe
     if: needs.probe.outputs.reachable == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
       contents: read
@@ -87,7 +87,7 @@ jobs:
     name: coverage report
     needs: probe
     if: needs.probe.outputs.reachable == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
