@@ -48,7 +48,10 @@ jobs:
         with:
           persist-credentials: false
       # llvm brings llvm-symbolizer. Without it, the leak report has no function
-      # names, and the `leak:virClassNew` suppression cannot match.
+      # names, and the `leak:virClassNew` suppression cannot match. libvirt and
+      # libxml2 come from the runner image. The notes below and in
+      # lsan-suppressions.txt describe the Ubuntu 24.04 image, which was
+      # ubuntu-latest in October 2026. When ubuntu-latest moves, read them again.
       - name: Install libvirt-dev and llvm
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvirt-dev pkg-config llvm
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
