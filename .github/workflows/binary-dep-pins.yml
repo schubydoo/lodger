@@ -1,9 +1,10 @@
 name: Binary dep pins
 
-# Verify each version + sha256 release-asset pin against the digest GitHub publishes for the
-# asset (scripts/check_binary_dep_pins.py, verify mode). Today that is the actionlint pin in
-# actionlint.yml and the rustup-init pin in scripts/release/build.sh. Renovate CE runs the same script with --fix as a postUpgradeTask, so this job
-# also proves that the script still works: an upstream change (a renamed asset, a dropped
+# Verify each version + sha256 pin against the digest that upstream publishes: a GitHub
+# release asset digest, or a published .sha256 file (scripts/check_binary_dep_pins.py,
+# verify mode). Today that is the actionlint pin in actionlint.yml and the rustup-init pin
+# in scripts/release/build.sh. Renovate CE runs the same script with --fix as a
+# postUpgradeTask, so this job also proves that the script still works: an upstream change (a renamed asset, a dropped
 # digest) fails here instead of first appearing as a failed Renovate PR.
 #
 # Path-filtered on PRs and pushes, so it never runs on an unrelated PR, and weekly on a
@@ -47,7 +48,7 @@ jobs:
           persist-credentials: false
       # GITHUB_TOKEN only raises the API rate limit for reading a public repo's release
       # metadata. The job's contents: read permission caps it.
-      - name: Verify pins against GitHub's published asset digests
+      - name: Verify pins against the published digests
         run: python3 scripts/check_binary_dep_pins.py
         env:
           GITHUB_TOKEN: ${{ github.token }}

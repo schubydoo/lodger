@@ -43,9 +43,9 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class WorkflowPin:
-    """One ``*_VERSION`` + ``*_SHA256`` release-asset pin in a workflow file."""
+    """One ``*_VERSION`` + ``*_SHA256`` pin in a workflow or script file."""
 
-    path: str  # workflow file, relative to the repo root
+    path: str  # pinned file, relative to the repo root
     owner: str
     repo: str
     version_re: re.Pattern[str]  # one group: the pinned version
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"FAIL {pin.path}: sha256 mismatch\n"
                 f"       pinned:    {current}\n"
-                f"       published: {detail}   <- set the *_SHA256 in this workflow to this"
+                f"       published: {detail}   <- set the *_SHA256 in this file to this"
             )
             failures += 1
 
