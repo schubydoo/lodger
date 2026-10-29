@@ -101,7 +101,7 @@ jobs:
               apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
               systemd systemd-sysv libvirt-daemon-system curl ca-certificates
           - name: Ubuntu 24.04
-            image: "ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c"
+            image: "ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852"
             setup: >-
               apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
               systemd systemd-sysv libvirt-daemon-system curl ca-certificates
