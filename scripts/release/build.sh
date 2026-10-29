@@ -8,7 +8,8 @@
 set -euo pipefail
 
 # rustup-init, pinned by version and SHA-256. The toolchain itself comes from
-# rust-toolchain.toml.
+# rust-toolchain.toml. Renovate bumps the version, and its postUpgradeTask
+# `python3 scripts/check_binary_dep_pins.py --fix` rewrites the hash.
 RUSTUP_VERSION=1.29.1
 RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
 
