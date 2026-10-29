@@ -8,6 +8,10 @@ the ``github-releases`` datasource exposes the git-tag commit, not the asset's f
 GitHub publishes a per-asset SHA-256 (the ``digest`` field of a release asset), so this
 script reads that digest and compares it with the pin.
 
+``scripts/release/build.sh`` pins rustup-init the same way, by ``RUSTUP_VERSION`` and
+``RUSTUP_SHA256``. rustup-init is not a GitHub release asset, so for that pin the script
+reads the ``.sha256`` file that static.rust-lang.org publishes next to the binary.
+
 * verify (default): a stale hash fails and the script prints the correct value. The
   ``binary-dep-pins`` workflow runs this mode.
 * ``--fix``: a stale hash is rewritten in place. The self-hosted Renovate CE runs this as a
@@ -48,6 +52,9 @@ class WorkflowPin:
     sha_re: re.Pattern[str]  # one group: the pinned 64-hex sha256 (the rewrite target)
     tag: Callable[[str], str]  # version -> release tag
     asset: Callable[[str], str]  # version -> downloaded asset name
+    # version -> URL of a published "<sha256> <name>" file, for an asset that is not on a
+    # GitHub release. When set, the script reads the hash from it instead of the release.
+    sha_url: Callable[[str], str] | None = None
 
 
 PINS: tuple[WorkflowPin, ...] = (
@@ -62,7 +69,26 @@ PINS: tuple[WorkflowPin, ...] = (
         tag=lambda v: f"v{v}",
         asset=lambda v: f"actionlint_{v}_linux_amd64.tar.gz",
     ),
+    # The URL matches the download in build.sh. The rustup tags are bare ("1.29.2").
+    WorkflowPin(
+        path="scripts/release/build.sh",
+        owner="rust-lang",
+        repo="rustup",
+        version_re=re.compile(r"^RUSTUP_VERSION=(\S+)$", re.MULTILINE),
+        sha_re=re.compile(r"^RUSTUP_SHA256=([0-9a-f]{64})$", re.MULTILINE),
+        tag=lambda v: v,
+        asset=lambda _v: "rustup-init",
+        sha_url=lambda v: (
+            f"https://static.rust-lang.org/rustup/archive/{v}/x86_64-unknown-linux-gnu/rustup-init.sha256"
+        ),
+    ),
 )
+
+
+def fetch_text(url: str) -> str:
+    """Return the body of ``url`` as text (raises on failure)."""
+    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - fixed https host
+        return resp.read().decode("utf-8")
 
 
 def fetch_release(owner: str, repo: str, tag: str) -> dict:
@@ -92,6 +118,16 @@ def resolve(pin: WorkflowPin, root: Path) -> tuple[str, str, str]:
         return "error", f"could not find the VERSION/SHA256 pin in {pin.path}", ""
     version, current = vmatch.group(1), smatch.group(1)
     tag, asset_name = pin.tag(version), pin.asset(version)
+    if pin.sha_url is not None:
+        url = pin.sha_url(version)
+        try:
+            body = fetch_text(url)
+        except (OSError, http.client.HTTPException, ValueError) as exc:
+            return "error", f"could not fetch {url}: {exc}", current
+        published = body.split()[0] if body.split() else ""
+        if re.fullmatch(r"[0-9a-f]{64}", published) is None:
+            return "error", f"{url} holds no sha256: {body[:80]!r}", current
+        return ("ok", "", current) if published == current else ("mismatch", published, current)
     try:
         release = fetch_release(pin.owner, pin.repo, tag)
     except (OSError, http.client.HTTPException, ValueError) as exc:
@@ -129,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     for pin in PINS:
         status, detail, current = resolve(pin, root)
         if status == "ok":
-            print(f"OK   {pin.path}: sha256 matches GitHub's published digest")
+            print(f"OK   {pin.path}: sha256 matches the published digest")
         elif status == "error":
             print(f"FAIL {pin.path}: {detail}")
             failures += 1
