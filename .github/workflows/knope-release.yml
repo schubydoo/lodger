@@ -161,7 +161,7 @@ jobs:
         uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
         with:
           # renovate: datasource=github-releases depName=knope-dev/knope extractVersion=^knope/v(?<version>.+)$
-          version: 0.23.1
+          version: 0.23.2
       # knope creates the draft, uploads dist/release-assets/*, and publishes.
       # A re-run after a successful publish does nothing.
       - name: Create and publish the GitHub Release
