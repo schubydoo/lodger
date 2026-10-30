@@ -20,7 +20,7 @@ set -euo pipefail
 
 # renovate: the image pins of this test.
 NGINX_IMAGE=nginx:1.30.5@sha256:9bf97bd7714f5e24c1ccd545ecb9eb5435cb6d109c97cebb15e7e455e0239edb
-CADDY_IMAGE=caddy:2.11.7@sha256:5e5286cb37d44086d651a5363f05f43a692ce4d649d88fb1bd844579f45fa9e8
+CADDY_IMAGE=caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
 CURL_IMAGE=curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
 
 proxy=${1:?usage: proxy-smoke.sh <nginx|caddy> <host|bridge>}
