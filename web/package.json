@@ -55,7 +55,7 @@
 		"prettier-plugin-svelte": "4.1.1",
 		"prettier-plugin-tailwindcss": "0.8.1",
 		"rollup-plugin-license": "3.7.1",
-		"shadcn-svelte": "1.7.0",
+		"shadcn-svelte": "1.7.1",
 		"spdx-expression-validate": "2.0.0",
 		"spdx-satisfies": "6.0.0",
 		"svelte": "5.57.2",

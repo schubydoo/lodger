@@ -257,8 +257,8 @@ importers:
         specifier: 3.7.1
         version: 3.7.1(picomatch@4.0.7)(rollup@4.65.0)
       shadcn-svelte:
-        specifier: 1.7.0
-        version: 1.7.0(svelte@5.57.2(@typescript-eslint/types@8.72.0))
+        specifier: 1.7.1
+        version: 1.7.1(svelte@5.57.2(@typescript-eslint/types@8.72.0))
       spdx-expression-validate:
         specifier: 2.0.0
         version: 2.0.0
@@ -2003,8 +2003,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  shadcn-svelte@1.7.0:
-    resolution: {integrity: sha512-AK3ZsYOL8PN/RxcEBCHGvQj2TrLfaaBsbw0QohyEb3nn/yPNDRC/+9iSjnTp/uKEe+tAi0tBxB/Yhzno0N7EEg==}
+  shadcn-svelte@1.7.1:
+    resolution: {integrity: sha512-tkUavVtc+6E2snOd7CmHZYq5hi1v9oM3KT0ks6cgN5G4IykbIbt+1xDrSWb9ENUh8PWqeses4xJPqRgCzkzcMQ==}
     hasBin: true
     peerDependencies:
       svelte: ^5.0.0
@@ -3827,7 +3827,7 @@ snapshots:
 
   semver@7.8.5: {}
 
-  shadcn-svelte@1.7.0(svelte@5.57.2(@typescript-eslint/types@8.72.0)):
+  shadcn-svelte@1.7.1(svelte@5.57.2(@typescript-eslint/types@8.72.0)):
     dependencies:
       cn: 0.3.3
       commander: 14.0.3
