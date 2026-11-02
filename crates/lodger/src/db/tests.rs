@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use rusqlite_migration::Migrations;
-
-use super::{Db, FILE, MIGRATIONS};
+use super::{Db, FILE, MIGRATIONS, migrate};
 
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path).unwrap().permissions().mode() & 0o777
@@ -101,10 +99,44 @@ async fn migrations_run_once_and_a_second_run_changes_nothing() {
     assert_eq!(after, before);
 }
 
+fn user_version(c: &rusqlite::Connection) -> i64 {
+    c.pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap()
+}
+
 #[test]
-fn the_migrations_are_valid() {
-    // rusqlite_migration runs them on a fresh in-memory database.
-    Migrations::from_slice(MIGRATIONS).validate().unwrap();
+fn migrations_start_after_the_ones_that_ran() {
+    let mut c = rusqlite::Connection::open_in_memory().unwrap();
+    migrate(&mut c, &["CREATE TABLE a (x)"]).unwrap();
+    // A second run of the first migration would fail: the table exists.
+    migrate(&mut c, &["CREATE TABLE a (x)", "CREATE TABLE b (x)"]).unwrap();
+    assert_eq!(user_version(&c), 2);
+    assert_eq!(schema(&c).unwrap().len(), 2);
+}
+
+#[test]
+fn a_failed_migration_changes_nothing() {
+    let mut c = rusqlite::Connection::open_in_memory().unwrap();
+    let err = migrate(&mut c, &["CREATE TABLE a (x)", "NOT SQL"]).unwrap_err();
+    assert!(err.starts_with("migration 2:"), "{err}");
+    assert_eq!(user_version(&c), 0);
+    assert!(schema(&c).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_database_from_a_newer_lodger_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    drop(Db::open(tmp.path()).await.unwrap());
+    let c = rusqlite::Connection::open(tmp.path().join(FILE)).unwrap();
+    c.pragma_update(
+        None,
+        "user_version",
+        i64::try_from(MIGRATIONS.len()).unwrap() + 1,
+    )
+    .unwrap();
+    drop(c);
+    let err = Db::open(tmp.path()).await.unwrap_err();
+    assert!(err.contains("from a newer Lodger"), "{err}");
 }
 
 /// PRD 5.6: libvirt is the source of truth, so SQLite holds no VM data. The
