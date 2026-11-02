@@ -1,23 +1,24 @@
 //! The SQLite database in the state directory (TAD sections 5.1 and 5.2).
 //!
-//! One connection, which `tokio-rusqlite` runs on its own thread, serves
-//! every query. The file and its directory are private to the Lodger user:
-//! the directory has mode 0700 and the database 0600. SQLite gives the WAL
-//! and shared-memory files the mode of the database file.
+//! One connection serves every query. A mutex gives it to one query at a
+//! time, and each query runs on tokio's blocking pool. The file and its
+//! directory are private to the Lodger user: the directory has mode 0700 and
+//! the database 0600. SQLite gives the WAL and shared-memory files the mode
+//! of the database file.
 
 use std::fs::{DirBuilder, OpenOptions, Permissions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rusqlite::OptionalExtension;
-use rusqlite_migration::{M, Migrations};
 
 /// The database file in the state directory.
 pub const FILE: &str = "lodger.db";
 
 /// Every migration, in order. Never edit or remove a released one: add a new
 /// one instead. `user_version` counts how many have run.
-const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("migrations/0001_initial.sql"))];
+const MIGRATIONS: &[&str] = &[include_str!("migrations/0001_initial.sql")];
 
 /// The current time as SQL, in the ISO 8601 form that the tables store.
 /// ISO 8601 strings in UTC compare in time order.
@@ -91,7 +92,7 @@ pub struct Session {
 /// connection.
 #[derive(Clone)]
 pub struct Db {
-    conn: tokio_rusqlite::Connection,
+    conn: Conn,
     path: PathBuf,
 }
 
@@ -109,47 +110,29 @@ impl Db {
     pub async fn open(state_dir: &Path) -> Result<Self, String> {
         let path = state_dir.join(FILE);
         prepare_files(state_dir, &path)?;
-        let conn = tokio_rusqlite::Connection::open(&path)
-            .await
-            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-        conn.call(|c| -> Result<(), String> {
-            let pragma = |name: &str, value: &dyn rusqlite::ToSql| {
-                c.pragma_update(None, name, value)
-                    .map_err(|e| format!("PRAGMA {name}: {e}"))
-            };
-            // WAL keeps the file consistent after a power cut. FULL makes
-            // each commit durable, which the audit log wants; Lodger writes
-            // little, so the cost does not matter.
-            pragma("journal_mode", &"WAL")?;
-            pragma("synchronous", &"FULL")?;
-            // SQLite enforces foreign keys, and so ON DELETE CASCADE, only
-            // when a connection asks for it.
-            pragma("foreign_keys", &true)?;
-            pragma("busy_timeout", &5000)?;
-            Migrations::from_slice(MIGRATIONS)
-                .to_latest(c)
-                .map_err(|e| format!("migrations: {e}"))
+        let file = path.clone();
+        let conn = tokio::task::spawn_blocking(move || {
+            let mut c = rusqlite::Connection::open(&file)
+                .map_err(|e| format!("cannot open {}: {e}", file.display()))?;
+            prepare(&mut c).map_err(|e| format!("cannot prepare {}: {e}", file.display()))?;
+            Ok::<_, String>(c)
         })
         .await
-        .map_err(|e| format!("cannot prepare {}: {e}", path.display()))?;
-        Ok(Self { conn, path })
+        .map_err(|e| e.to_string())??;
+        Ok(Self {
+            conn: Conn::new(conn),
+            path,
+        })
     }
 
     /// An in-memory database with every migration, for tests.
     #[cfg(test)]
     pub async fn in_memory() -> Self {
-        let conn = tokio_rusqlite::Connection::open_in_memory().await.unwrap();
-        conn.call(|c| -> Result<(), String> {
-            c.pragma_update(None, "foreign_keys", true)
-                .map_err(|e| e.to_string())?;
-            Migrations::from_slice(MIGRATIONS)
-                .to_latest(c)
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .unwrap();
+        let mut c = rusqlite::Connection::open_in_memory().unwrap();
+        c.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate(&mut c, MIGRATIONS).unwrap();
         Self {
-            conn,
+            conn: Conn::new(c),
             path: PathBuf::from(":memory:"),
         }
     }
@@ -159,7 +142,6 @@ impl Db {
         self.conn
             .call(|c| c.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0)))
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Creates the first account, in one transaction that sees no other
@@ -180,16 +162,15 @@ impl Db {
                     return Ok(false);
                 }
                 tx.execute(
-                    "INSERT INTO accounts (username, password_hash, created_at, password_changed_at)
+                "INSERT INTO accounts (username, password_hash, created_at, password_changed_at)
                      VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
                              strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-                    [&username, &password_hash],
-                )?;
+                [&username, &password_hash],
+            )?;
                 tx.commit()?;
                 Ok(true)
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// Every account, by name.
@@ -211,7 +192,6 @@ impl Db {
                 rows.collect::<rusqlite::Result<Vec<_>>>()
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Adds an account. Returns its id, or `None` when the name is taken,
@@ -221,8 +201,7 @@ impl Db {
         username: String,
         password_hash: String,
     ) -> Result<Option<i64>, String> {
-        self.conn
-            .call(move |c| {
+        self.conn.call(move |c| {
                 let inserted = c.execute(
                     &format!(
                         "INSERT INTO accounts (username, password_hash, created_at, password_changed_at)
@@ -241,7 +220,6 @@ impl Db {
                 }
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Deletes an account and, through the foreign key, all its sessions
@@ -269,7 +247,6 @@ impl Db {
                 Ok(outcome)
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// The account with this id.
@@ -290,7 +267,6 @@ impl Db {
                 .optional()
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Stores a new password hash, ends every session of the account
@@ -326,7 +302,6 @@ impl Db {
                 Ok(ended)
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// Stores a new password hash for the account with this username and
@@ -364,13 +339,11 @@ impl Db {
                 Ok(Some(ended))
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// Adds a row to the audit log, with the current time.
     pub async fn audit(&self, row: AuditRow) -> Result<(), String> {
-        self.conn
-            .call(move |c| {
+        self.conn.call(move |c| {
                 c.execute(
                     &format!(
                         "INSERT INTO audit_log
@@ -390,7 +363,6 @@ impl Db {
                 .map(drop)
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Deletes the audit rows older than `days` days and returns how many
@@ -405,7 +377,6 @@ impl Db {
                 )
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// The account with this username, compared without regard to case.
@@ -426,14 +397,12 @@ impl Db {
                 .optional()
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Stores a new session. The token itself never reaches the database:
     /// only its SHA-256. It ends 24 hours after its start at the latest.
     pub async fn create_session(&self, new: NewSession) -> Result<(), String> {
-        self.conn
-            .call(move |c| {
+        self.conn.call(move |c| {
                 // A login is a good moment to drop sessions that ended.
                 c.execute(
                     &format!(
@@ -445,15 +414,13 @@ impl Db {
                 Ok(())
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// The live session with this token hash, or `None`. A live session is
     /// younger than 24 hours and was used in the last 60 minutes (TAD 7.2).
     /// Using it counts as activity, recorded at most once a minute.
     pub async fn session(&self, token_sha256: [u8; 32]) -> Result<Option<Session>, String> {
-        self.conn
-            .call(move |c| {
+        self.conn.call(move |c| {
                 let found = c
                     .query_row(
                         &format!(
@@ -484,7 +451,6 @@ impl Db {
                 Ok(found)
             })
             .await
-            .map_err(|e: tokio_rusqlite::Error<rusqlite::Error>| e.to_string())
     }
 
     /// Whether the session is still live. Unlike [`Db::session`], it does
@@ -502,7 +468,6 @@ impl Db {
                 )
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Ends the session with this token hash, if it exists.
@@ -516,7 +481,6 @@ impl Db {
                 .map(drop)
             })
             .await
-            .map_err(|e| e.to_string())
     }
 
     /// Runs a trivial query, for the health check.
@@ -524,18 +488,92 @@ impl Db {
         self.conn
             .call(|c| c.query_row("SELECT 1", [], |_| Ok(())))
             .await
-            .map_err(|e| e.to_string())
     }
 
-    /// Runs `f` on the connection's thread.
+    /// Runs `f` on the connection, for tests.
     #[cfg(test)]
     pub async fn call<R, F>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&mut rusqlite::Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,
     {
-        self.conn.call(f).await.map_err(|e| e.to_string())
+        self.conn.call(f).await
     }
+}
+
+/// The one connection, shared by every clone of [`Db`].
+#[derive(Clone)]
+struct Conn(Arc<Mutex<rusqlite::Connection>>);
+
+impl Conn {
+    fn new(c: rusqlite::Connection) -> Self {
+        Self(Arc::new(Mutex::new(c)))
+    }
+
+    /// Runs `f` on the connection, on tokio's blocking pool, so that a slow
+    /// query does not stall the async workers.
+    async fn call<R, F>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut rusqlite::Connection) -> rusqlite::Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let conn = Arc::clone(&self.0);
+        tokio::task::spawn_blocking(move || {
+            // A panic in an earlier call poisons the mutex, but the
+            // connection is still sound: a dropped transaction rolls back.
+            let mut c = conn.lock().unwrap_or_else(PoisonError::into_inner);
+            f(&mut c)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// Sets the connection's pragmas and runs the migrations that have not run.
+fn prepare(c: &mut rusqlite::Connection) -> Result<(), String> {
+    let pragma = |name: &str, value: &dyn rusqlite::ToSql| {
+        c.pragma_update(None, name, value)
+            .map_err(|e| format!("PRAGMA {name}: {e}"))
+    };
+    // WAL keeps the file consistent after a power cut. FULL makes each commit
+    // durable, which the audit log wants; Lodger writes little, so the cost
+    // does not matter.
+    pragma("journal_mode", &"WAL")?;
+    pragma("synchronous", &"FULL")?;
+    // SQLite enforces foreign keys, and so ON DELETE CASCADE, only when a
+    // connection asks for it.
+    pragma("foreign_keys", &true)?;
+    pragma("busy_timeout", &5000)?;
+    migrate(c, MIGRATIONS).map_err(|e| format!("migrations: {e}"))
+}
+
+/// Runs the migrations after the first `user_version` ones, in one
+/// transaction, and sets `user_version` to their number. Lodger 0.1 used
+/// `rusqlite_migration`, which keeps the same count, so its databases need no
+/// change. A database from a newer Lodger, with more migrations, is refused.
+fn migrate(c: &mut rusqlite::Connection, migrations: &[&str]) -> Result<(), String> {
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let done: i64 = tx
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let done = usize::try_from(done).map_err(|_| format!("bad schema version {done}"))?;
+    if done > migrations.len() {
+        return Err(format!(
+            "the schema version is {done}, but this Lodger knows only {}: the database is from a newer Lodger",
+            migrations.len()
+        ));
+    }
+    for (n, sql) in migrations.iter().enumerate().skip(done) {
+        tx.execute_batch(sql)
+            .map_err(|e| format!("migration {}: {e}", n + 1))?;
+    }
+    let total = i64::try_from(migrations.len()).map_err(|e| e.to_string())?;
+    tx.pragma_update(None, "user_version", total)
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 /// Gives the state directory mode 0700 and the database file mode 0600,
