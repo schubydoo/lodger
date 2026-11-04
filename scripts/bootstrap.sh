@@ -81,6 +81,15 @@ node --version
 pnpm_version=$(node -p 'require("./web/package.json").packageManager' | sed -n 's/^pnpm@\([^+]*\).*$/\1/p')
 [ -n "$pnpm_version" ] || die "no pnpm version in the packageManager field of web/package.json"
 info "installing pnpm $pnpm_version into ~/.local…"
+# An older version of this script linked corepack, pnpm, and pnpx into
+# ~/.local/bin through corepack. npm refuses to overwrite those links, so remove
+# each link that points into corepack, and nothing else.
+for f in corepack pnpm pnpx; do
+  link=$HOME/.local/bin/$f
+  if [ -L "$link" ] && [[ $(readlink "$link") == *corepack* ]]; then
+    rm -f "$link"
+  fi
+done
 npm install --global --prefix "$HOME/.local" --no-fund --no-audit --no-update-notifier --loglevel=error "pnpm@$pnpm_version" >/dev/null
 case "$(cd web && pnpm --version)" in
   "$pnpm_version") info "pnpm $pnpm_version" ;;
