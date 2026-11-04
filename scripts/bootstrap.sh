@@ -6,7 +6,7 @@
 #   scripts/bootstrap.sh
 #
 # It installs the system packages, the Rust toolchain of rust-toolchain.toml,
-# Node from .node-version into ~/.local, and pnpm through corepack. Then it
+# Node from .node-version into ~/.local, and pnpm through npm. Then it
 # builds the web app and the debug server. It never starts or changes a VM, and
 # it installs no libvirt daemon: the dev server uses libvirt's test driver.
 set -euo pipefail
@@ -73,13 +73,19 @@ if [ ! -x "$node_dir/bin/node" ]; then
   tar -xJf "$tmp/$tarball" -C "$HOME/.local/lib"
 fi
 export PATH=$HOME/.local/bin:$node_dir/bin:$PATH
-ln -sf "$node_dir/bin/node" "$node_dir/bin/npm" "$node_dir/bin/corepack" "$HOME/.local/bin/"
+ln -sf "$node_dir/bin/node" "$node_dir/bin/npm" "$HOME/.local/bin/"
 node --version
 
-info "enabling pnpm through corepack…"
-export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-corepack enable --install-directory "$HOME/.local/bin" pnpm
-(cd web && pnpm --version)
+# Node 25 and later ship no corepack, so npm installs the pnpm version that the
+# packageManager field of web/package.json names.
+pnpm_version=$(node -p 'require("./web/package.json").packageManager' | sed -n 's/^pnpm@\([^+]*\).*$/\1/p')
+[ -n "$pnpm_version" ] || die "no pnpm version in the packageManager field of web/package.json"
+info "installing pnpm $pnpm_version into ~/.local…"
+npm install --global --prefix "$HOME/.local" --no-fund --no-audit --no-update-notifier --loglevel=error "pnpm@$pnpm_version" >/dev/null
+case "$(cd web && pnpm --version)" in
+  "$pnpm_version") info "pnpm $pnpm_version" ;;
+  *) die "pnpm is not version $pnpm_version" ;;
+esac
 
 info "building the web app…"
 (cd web && pnpm install --frozen-lockfile && pnpm run build)

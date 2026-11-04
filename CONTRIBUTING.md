@@ -26,7 +26,8 @@ On another system, install these by hand:
 - The Rust toolchain that `rust-toolchain.toml` names, with `rustfmt` and `clippy`.
 - The libvirt client library and headers (`libvirt-dev` or `libvirt-devel`), and
   `pkg-config`.
-- Node at the version in `.node-version`, and pnpm through corepack.
+- Node at the version in `.node-version`, and pnpm at the version in the
+  `packageManager` field of `web/package.json`.
 - `just`, for the recipes in the `justfile`.
 
 ## Run Lodger
