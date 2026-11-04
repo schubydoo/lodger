@@ -19,7 +19,7 @@ Rust (toolchain 1.98.1 from `rust-toolchain.toml`, MSRV 1.95):
   The setup token is in stderr.
 - The cargo steps need `libvirt-dev` (the libvirt client library and headers).
 
-Web (run every command inside `web/`, with pnpm 12.5.1 from corepack):
+Web (run every command inside `web/`, with the pnpm version of `web/package.json`):
 
 - Install: `pnpm install --frozen-lockfile`.
 - Gates: `pnpm run lint` (prettier and eslint), `pnpm run check` (svelte-check),

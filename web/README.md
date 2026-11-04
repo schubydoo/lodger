@@ -6,8 +6,8 @@ Node. Node and pnpm are needed only to build and develop this app. `just build` 
 this app first, then the release binary.
 
 - Node: the version in `../.node-version`
-- pnpm: the version in the `packageManager` field of `package.json`, through corepack
-  (`corepack enable`, or run `corepack pnpm ...`)
+- pnpm: the version in the `packageManager` field of `package.json`. Node 25 and later
+  ship no corepack, so install it with `npm install --global pnpm@<version>`.
 
 ```
 pnpm install       # install from pnpm-lock.yaml
