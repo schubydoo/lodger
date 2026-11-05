@@ -42,7 +42,7 @@
 		"@testing-library/jest-dom": "7.0.1",
 		"@testing-library/svelte": "5.4.2",
 		"@testing-library/user-event": "14.6.8",
-		"@types/node": "26.6.5",
+		"@types/node": "26.6.6",
 		"@vitest/coverage-v8": "5.0.5",
 		"bits-ui": "2.20.2",
 		"cn": "0.5.0",
