@@ -637,10 +637,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-a-git-pin" class="md-nav__link">
+  <a href="#history-the-git-pin" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why a Git pin
+        History: the Git pin
       
     </span>
   </a>
@@ -670,10 +670,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#problems-still-present-at-this-commit" class="md-nav__link">
+  <a href="#problems-still-present-in-050" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Problems still present at this commit
+        Problems still present in 0.5.0
       
     </span>
   </a>
@@ -681,10 +681,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#checklist-for-the-next-pin-update" class="md-nav__link">
+  <a href="#checklist-for-the-next-version-update" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Checklist for the next pin update
+        Checklist for the next version update
       
     </span>
   </a>
@@ -712,7 +712,7 @@
 
 
 <h1 id="the-virt-crate-pin">The <code>virt</code> crate pin<a class="headerlink" href="#the-virt-crate-pin" title="Permanent link">&para;</a></h1>
-<p>Lodger uses the <code>virt</code> crate from a Git commit, not from crates.io. This file records why, which commit, and what the review found. Update it in the same pull request as any change to the pin in <code>Cargo.toml</code>.</p>
+<p>Lodger uses one exact crates.io version of the <code>virt</code> crate. This file records which version, why it was a Git commit before, and what the review found. Update it in the same pull request as any change to the <code>virt</code> line in <code>Cargo.toml</code>.</p>
 <h2 id="current-pin">Current pin<a class="headerlink" href="#current-pin" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -723,38 +723,32 @@
 </thead>
 <tbody>
 <tr>
-<td>Repository</td>
-<td><code>https://gitlab.com/libvirt/libvirt-rust.git</code></td>
+<td>Source</td>
+<td>crates.io, <code>virt = "=0.5.0"</code></td>
 </tr>
 <tr>
-<td>Branch</td>
-<td><code>master</code></td>
+<td>Crate versions</td>
+<td><code>virt</code> 0.5.0 and <code>virt-sys</code> 0.3.2, both LGPL-2.1</td>
 </tr>
 <tr>
-<td>Commit</td>
-<td><code>0bd0cbffce4dd914e76d74e4de480bf95fabdc98</code> ("virt-sys: Regenerate bindings", 2026-08-27)</td>
+<td>Upstream commit</td>
+<td><code>f4ac9211c7eaaca61f93d52d95d8d3c6f806494f</code> ("release v0.5.0", 2026-10-29) in <code>https://gitlab.com/libvirt/libvirt-rust.git</code></td>
 </tr>
 <tr>
-<td>Crate versions at that commit</td>
-<td><code>virt</code> 0.4.3 and <code>virt-sys</code> 0.3.2, both LGPL-2.1</td>
-</tr>
-<tr>
-<td>Base release</td>
-<td>v0.4.3 (2025-08-21)</td>
-</tr>
-<tr>
-<td>Commits since the base release</td>
-<td>106</td>
+<td>Published</td>
+<td>2026-10-29</td>
 </tr>
 <tr>
 <td>Reviewed</td>
-<td>2026-09-21, for the workspace scaffold</td>
+<td>2026-11-06</td>
 </tr>
 </tbody>
 </table>
-<h2 id="why-a-git-pin">Why a Git pin<a class="headerlink" href="#why-a-git-pin" title="Permanent link">&para;</a></h2>
-<p>The crate had no release in 13 months, but <code>master</code> holds fixes that Lodger needs. Schuby chose the pin on 2026-09-21. When upstream publishes a release that contains this commit, move back to crates.io. Renovate watches for that release.</p>
+<p>The review on 2026-11-06 compared the crates.io files with the Git tree at <code>f4ac921</code>. <code>src/</code>, <code>virt-sys/src/</code>, <code>virt-sys/build.rs</code>, and the dependency lists are identical. Lodger used <code>f4ac921</code> as a Git pin before, so the move to crates.io changes no code.</p>
+<h2 id="history-the-git-pin">History: the Git pin<a class="headerlink" href="#history-the-git-pin" title="Permanent link">&para;</a></h2>
+<p>From 2026-09-21 to 2026-11-06, Lodger used <code>virt</code> from a Git commit on <code>master</code>. The crate had no release after v0.4.3 (2025-08-21) for 13 months, but <code>master</code> held fixes that Lodger needs. The first pin was <code>0bd0cbf</code> ("virt-sys: Regenerate bindings", 2026-08-27). A later update moved it to <code>f4ac921</code>, which adds 2 commits: <code>19390f2</code> ("virt-sys: Do not generate layout tests") and the release commit. Neither commit changes <code>src/</code> or <code>virt-sys/src/</code>. Upstream then published <code>f4ac921</code> as v0.5.0, so Lodger moved back to crates.io.</p>
 <h2 id="fixes-that-lodger-needs">Fixes that Lodger needs<a class="headerlink" href="#fixes-that-lodger-needs" title="Permanent link">&para;</a></h2>
+<p>All of these are in 0.5.0, and none is in 0.4.3.</p>
 <ul>
 <li><code>f72baaa</code> "Add missing refs on object back pointers". Before this fix, methods that return a parent object, such as the connection of a domain, did not take their own reference. Dropping the connection then underflowed the reference count, which can cause a use-after-free.</li>
 <li><code>663f88d</code> "do not unwrap potential Err when creating CStrings". If a string contains a NUL byte, most methods now return an error instead of a panic. 0.4.3 had 28 such <code>unwrap()</code> calls in <code>domain.rs</code> alone.</li>
@@ -771,18 +765,19 @@
 <li>Several setters return <code>()</code> instead of a count or a <code>bool</code> (<code>6ddbef9</code>, <code>6fababc</code>).</li>
 </ul>
 <p>The Phase 0 spike code targets 0.4.3, so it needs these renames before any of it moves into Lodger.</p>
-<h2 id="problems-still-present-at-this-commit">Problems still present at this commit<a class="headerlink" href="#problems-still-present-at-this-commit" title="Permanent link">&para;</a></h2>
+<h2 id="problems-still-present-in-050">Problems still present in 0.5.0<a class="headerlink" href="#problems-still-present-in-050" title="Permanent link">&para;</a></h2>
 <ul>
 <li>When libvirt returns an error, <code>event_add_handle</code> and <code>event_add_timeout</code> in <code>src/event.rs</code> free the caller's <code>opaque</code> pointer instead of the box they created. That corrupts memory. Lodger never calls these two functions. It uses libvirt's default event loop and its own event glue in <code>lodger-virt</code>.</li>
 <li>Two string macros in <code>src/lib.rs</code> still call <code>CString::new(...).unwrap()</code>, so a NUL byte in their input still panics. <code>lodger-core</code> rejects NUL bytes before any call reaches <code>virt</code>.</li>
 </ul>
-<h2 id="checklist-for-the-next-pin-update">Checklist for the next pin update<a class="headerlink" href="#checklist-for-the-next-pin-update" title="Permanent link">&para;</a></h2>
+<h2 id="checklist-for-the-next-version-update">Checklist for the next version update<a class="headerlink" href="#checklist-for-the-next-version-update" title="Permanent link">&para;</a></h2>
 <ol>
-<li>List the commits: <code>git log --format='%h %cs %s' &lt;old&gt;..&lt;new&gt;</code> in a clone of the repository.</li>
+<li>List the commits: <code>git log --format='%h %cs %s' v&lt;old&gt;..v&lt;new&gt;</code> in a clone of the repository.</li>
 <li>Read every commit that touches <code>src/</code> or <code>virt-sys/src/</code>.</li>
+<li>Make sure that the crates.io files match the Git tag. Compare <code>src/</code> of <code>virt-&lt;version&gt;/</code>, and <code>src/</code> and <code>build.rs</code> of <code>virt-sys-&lt;version&gt;/</code>, under <code>~/.cargo/registry/src/</code> with the clone. Compare the dependency lists too.</li>
 <li>Record new fixes, new breaking changes, and the state of the two open problems above.</li>
 <li>Run <code>just check</code> and the libvirt test-driver tests.</li>
-<li>Update the table at the top of this file.</li>
+<li>Update the table at the top of this file, and run <code>just notices</code>.</li>
 </ol>
 
 
