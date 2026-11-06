@@ -8,3 +8,7 @@ extend-exclude = [
     # Data: the most common passwords, which are not words.
     "crates/lodger-core/src/password/common.txt",
 ]
+
+[default.extend-words]
+# `pn` is a pnpm command name (scripts/bootstrap.sh), not a misspelling of "on".
+pn = "pn"
