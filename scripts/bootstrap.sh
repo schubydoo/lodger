@@ -6,13 +6,20 @@
 #   scripts/bootstrap.sh
 #
 # It installs the system packages, the Rust toolchain of rust-toolchain.toml,
-# Node from .node-version into ~/.local, and pnpm through npm. Then it
+# Node from .node-version into ~/.local, and the pnpm release binary. Then it
 # builds the web app and the debug server. It never starts or changes a VM, and
 # it installs no libvirt daemon: the dev server uses libvirt's test driver.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo"
+
+# The sha256 of each pnpm release tarball, for the version in the packageManager
+# field of web/package.json. Renovate bumps that version, and its postUpgradeTask
+# `python3 scripts/check_binary_dep_pins.py --fix` rewrites these from the digests
+# that GitHub publishes for the release assets.
+PNPM_SHA256_X64=565ff81174a14f6f7bd5d84c1b17e51031a80230d370a1fe24be5d16bd02a825
+PNPM_SHA256_ARM64=f5847699e5d528f8f8e9bcfb385e58cb9fba7482af1b1aa7b70737be42277f81
 
 info() { printf '[info] %s\n' "$*"; }
 die() { printf '[fail] %s\n' "$*" >&2; exit 1; }
@@ -55,8 +62,8 @@ fi
 
 node_version=$(tr -d '[:space:]' <.node-version)
 case "$(uname -m)" in
-  x86_64) node_arch=x64 ;;
-  aarch64) node_arch=arm64 ;;
+  x86_64) node_arch=x64 pnpm_sha256=$PNPM_SHA256_X64 ;;
+  aarch64) node_arch=arm64 pnpm_sha256=$PNPM_SHA256_ARM64 ;;
   *) die "no Node build for $(uname -m)" ;;
 esac
 node_dir=$HOME/.local/lib/node-v$node_version-linux-$node_arch
@@ -76,21 +83,36 @@ export PATH=$HOME/.local/bin:$node_dir/bin:$PATH
 ln -sf "$node_dir/bin/node" "$node_dir/bin/npm" "$HOME/.local/bin/"
 node --version
 
-# Node 25 and later ship no corepack, so npm installs the pnpm version that the
-# packageManager field of web/package.json names.
+# Node 25 and later ship no corepack, so the script installs the pnpm version
+# that the packageManager field of web/package.json names, from the pnpm
+# release on GitHub. The tarball holds a native binary that needs no Node.
 pnpm_version=$(node -p 'require("./web/package.json").packageManager' | sed -n 's/^pnpm@\([^+]*\).*$/\1/p')
 [ -n "$pnpm_version" ] || die "no pnpm version in the packageManager field of web/package.json"
-info "installing pnpm $pnpm_version into ~/.local…"
-# An older version of this script linked corepack, pnpm, and pnpx into
-# ~/.local/bin through corepack. npm refuses to overwrite those links, so remove
-# each link that points into corepack, and nothing else.
-for f in corepack pnpm pnpx; do
+pnpm_dir=$HOME/.local/lib/pnpm-v$pnpm_version-linux-$node_arch
+if [ ! -x "$pnpm_dir/pnpm" ]; then
+  info "installing pnpm $pnpm_version into $pnpm_dir…"
+  pnpm_tarball=pnpm-linux-$node_arch.tar.gz
+  pnpm_tmp=$(mktemp -d)
+  trap 'rm -rf "${tmp:-}" "$pnpm_tmp"' EXIT
+  curl -fsSL "https://github.com/pnpm/pnpm/releases/download/v$pnpm_version/$pnpm_tarball" \
+    -o "$pnpm_tmp/$pnpm_tarball"
+  echo "$pnpm_sha256  $pnpm_tmp/$pnpm_tarball" | sha256sum -c --quiet - \
+    || die "the pnpm download does not match PNPM_SHA256 in this script. Run python3 scripts/check_binary_dep_pins.py"
+  mkdir -p "$pnpm_tmp/pnpm"
+  tar -xzf "$pnpm_tmp/$pnpm_tarball" -C "$pnpm_tmp/pnpm"
+  rm -rf "$pnpm_dir"
+  mv "$pnpm_tmp/pnpm" "$pnpm_dir"
+fi
+# Older versions of this script linked pnpm and its other commands into
+# ~/.local/bin, through corepack or npm. Remove each such link, so that only the
+# new pnpm link stays.
+for f in corepack pnpm pnpx pn pnx; do
   link=$HOME/.local/bin/$f
-  if [ -L "$link" ] && [[ $(readlink "$link") == *corepack* ]]; then
+  if [ -L "$link" ] && [[ $(readlink "$link") == *corepack* || $(readlink "$link") == *node_modules/pnpm/* ]]; then
     rm -f "$link"
   fi
 done
-npm install --global --prefix "$HOME/.local" --no-fund --no-audit --no-update-notifier --loglevel=error "pnpm@$pnpm_version" >/dev/null
+ln -sf "$pnpm_dir/pnpm" "$HOME/.local/bin/pnpm"
 case "$(cd web && pnpm --version)" in
   "$pnpm_version") info "pnpm $pnpm_version" ;;
   *) die "pnpm is not version $pnpm_version" ;;

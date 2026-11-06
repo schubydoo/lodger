@@ -12,6 +12,11 @@ script reads that digest and compares it with the pin.
 ``RUSTUP_SHA256``. rustup-init is not a GitHub release asset, so for that pin the script
 reads the ``.sha256`` file that static.rust-lang.org publishes next to the binary.
 
+``scripts/bootstrap.sh`` pins the pnpm release tarballs by ``PNPM_SHA256_X64`` and
+``PNPM_SHA256_ARM64``. Their version is the ``packageManager`` field of ``web/package.json``,
+which Renovate's npm manager bumps, so for those pins the script reads the version from
+that file and the hashes from the GitHub release assets.
+
 * verify (default): a stale hash fails and the script prints the correct value. The
   ``binary-dep-pins`` workflow runs this mode.
 * ``--fix``: a stale hash is rewritten in place. The self-hosted Renovate CE runs this as a
@@ -55,6 +60,9 @@ class WorkflowPin:
     # version -> URL of a published "<sha256> <name>" file, for an asset that is not on a
     # GitHub release. When set, the script reads the hash from it instead of the release.
     sha_url: Callable[[str], str] | None = None
+    # File that holds the version, when it is not ``path``. ``version_re`` searches this
+    # file, and ``sha_re`` still searches (and rewrites) ``path``.
+    version_path: str | None = None
 
 
 PINS: tuple[WorkflowPin, ...] = (
@@ -81,6 +89,21 @@ PINS: tuple[WorkflowPin, ...] = (
         sha_url=lambda v: (
             f"https://static.rust-lang.org/rustup/archive/{v}/x86_64-unknown-linux-gnu/rustup-init.sha256"
         ),
+    ),
+    # The asset names match the download in bootstrap.sh. The pnpm tags are "v" + version.
+    # A corepack hash suffix ("+sha512....") is not part of the version.
+    *(
+        WorkflowPin(
+            path="scripts/bootstrap.sh",
+            owner="pnpm",
+            repo="pnpm",
+            version_re=re.compile(r'"packageManager":\s*"pnpm@([^"+]+)'),
+            sha_re=re.compile(rf"^PNPM_SHA256_{arch.upper()}=([0-9a-f]{{64}})$", re.MULTILINE),
+            tag=lambda v: f"v{v}",
+            asset=lambda _v, arch=arch: f"pnpm-linux-{arch}.tar.gz",
+            version_path="web/package.json",
+        )
+        for arch in ("x64", "arm64")
     ),
 )
 
@@ -109,11 +132,13 @@ def resolve(pin: WorkflowPin, root: Path) -> tuple[str, str, str]:
     sha256), or ``error`` (``detail`` says why the pin could not be verified; this includes an
     asset with no published digest). ``current_sha`` is empty when the pin could not be read.
     """
+    version_path = pin.version_path or pin.path
     try:
         text = (root / pin.path).read_text(encoding="utf-8")
+        version_text = (root / version_path).read_text(encoding="utf-8")
     except OSError as exc:
-        return "error", f"could not read {pin.path}: {exc}", ""
-    vmatch, smatch = pin.version_re.search(text), pin.sha_re.search(text)
+        return "error", f"could not read {pin.path} or {version_path}: {exc}", ""
+    vmatch, smatch = pin.version_re.search(version_text), pin.sha_re.search(text)
     if vmatch is None or smatch is None:
         return "error", f"could not find the VERSION/SHA256 pin in {pin.path}", ""
     version, current = vmatch.group(1), smatch.group(1)
