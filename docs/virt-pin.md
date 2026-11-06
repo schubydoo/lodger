@@ -47,7 +47,7 @@ The Phase 0 spike code targets 0.4.3, so it needs these renames before any of it
 
 1. List the commits: `git log --format='%h %cs %s' v<old>..v<new>` in a clone of the repository.
 2. Read every commit that touches `src/` or `virt-sys/src/`.
-3. Make sure that the crates.io files match the Git tag: compare `src/` and `virt-sys/src/` from `~/.cargo/registry/src/` with the clone.
+3. Make sure that the crates.io files match the Git tag. Compare `src/` of `virt-<version>/`, and `src/` and `build.rs` of `virt-sys-<version>/`, under `~/.cargo/registry/src/` with the clone. Compare the dependency lists too.
 4. Record new fixes, new breaking changes, and the state of the two open problems above.
 5. Run `just check` and the libvirt test-driver tests.
 6. Update the table at the top of this file, and run `just notices`.
