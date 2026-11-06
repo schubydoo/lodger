@@ -7,7 +7,9 @@ this app first, then the release binary.
 
 - Node: the version in `../.node-version`
 - pnpm: the version in the `packageManager` field of `package.json`. Node 25 and later
-  ship no corepack, so install it with `npm install --global pnpm@<version>`.
+  ship no corepack. `../scripts/bootstrap.sh` installs that version from the
+  `pnpm-linux-<arch>.tar.gz` release asset and checks its sha256. On another system,
+  take the same asset from the pnpm release on GitHub.
 
 ```
 pnpm install       # install from pnpm-lock.yaml
