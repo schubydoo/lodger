@@ -1,6 +1,5 @@
 # cargo-deny configuration: the supply-chain gate. Ported from scratchsmith.
-# Lodger differences: LGPL-2.1 for the libvirt `virt` crate, and one allowed
-# Git source for the reviewed `virt` pin (see docs/virt-pin.md).
+# Lodger difference: LGPL-2.1 for the libvirt `virt` crate.
 
 [advisories]
 version = 2
@@ -35,4 +34,3 @@ allow = [
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = ["https://gitlab.com/libvirt/libvirt-rust.git"]
