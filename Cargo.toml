@@ -18,7 +18,7 @@ lodger-virt = { path = "crates/lodger-virt" }
 # and watches crates.io: a PR for the release-watch line below means upstream
 # released, so check whether the release contains this commit and move back.
 # renovate: datasource=crate depName=virt-crates-io-release packageName=virt
-# virt-crates-io-release-watch = "0.4.3"
+# virt-crates-io-release-watch = "0.5.0"
 virt = { git = "https://gitlab.com/libvirt/libvirt-rust.git", rev = "f4ac9211c7eaaca61f93d52d95d8d3c6f806494f" }
 
 [profile.release]
