@@ -13,13 +13,9 @@ publish = false
 [workspace.dependencies]
 lodger-core = { path = "crates/lodger-core" }
 lodger-virt = { path = "crates/lodger-virt" }
-# Reviewed main-branch commit, not a crates.io release. See docs/virt-pin.md
-# before changing this pin. Renovate proposes new master commits (held for review)
-# and watches crates.io: a PR for the release-watch line below means upstream
-# released, so check whether the release contains this commit and move back.
-# renovate: datasource=crate depName=virt-crates-io-release packageName=virt
-# virt-crates-io-release-watch = "0.4.3"
-virt = { git = "https://gitlab.com/libvirt/libvirt-rust.git", rev = "f4ac9211c7eaaca61f93d52d95d8d3c6f806494f" }
+# Exact version: every bump needs the written diff review in docs/virt-pin.md.
+# Renovate holds `virt` bumps for that review.
+virt = "=0.5.0"
 
 [profile.release]
 lto = true
