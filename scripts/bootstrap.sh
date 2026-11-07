@@ -18,8 +18,8 @@ cd "$repo"
 # field of web/package.json. Renovate bumps that version, and its postUpgradeTask
 # `python3 scripts/check_binary_dep_pins.py --fix` rewrites these from the digests
 # that GitHub publishes for the release assets.
-PNPM_SHA256_X64=565ff81174a14f6f7bd5d84c1b17e51031a80230d370a1fe24be5d16bd02a825
-PNPM_SHA256_ARM64=f5847699e5d528f8f8e9bcfb385e58cb9fba7482af1b1aa7b70737be42277f81
+PNPM_SHA256_X64=2c58959fd5df5cb9f4e72784c08a60ffc7ee558fed9b04b22254e29112203a51
+PNPM_SHA256_ARM64=ce5a5b95a9974a0bbd713a5ef74416dbcd0e3fdf11f69ea92c5995b9c18ccb47
 
 info() { printf '[info] %s\n' "$*"; }
 die() { printf '[fail] %s\n' "$*" >&2; exit 1; }
