@@ -35,9 +35,10 @@ const ALLOWED = [
  * license text, so an update or a changed text fails the build again.
  */
 const LICENSE_FIXES: Record<string, { license: string; textStart: string }> = {
-	// A bits-ui dependency. 0.10.6 is the latest release, and its LICENSE
-	// file is MIT (Hunter Johnston and Thomas G. Lopes).
-	'svelte-toolbelt@0.10.6': { license: 'MIT', textStart: 'MIT License' }
+	// A bits-ui dependency. The LICENSE file of both versions is MIT (Hunter
+	// Johnston and Thomas G. Lopes).
+	'svelte-toolbelt@0.10.6': { license: 'MIT', textStart: 'MIT License' },
+	'svelte-toolbelt@0.10.7': { license: 'MIT', textStart: 'MIT License' }
 };
 
 /** The SPDX license of a package, from package.json or from LICENSE_FIXES. */
