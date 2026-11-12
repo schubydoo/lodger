@@ -23,7 +23,8 @@ describe('the license check', () => {
 		const toolbelt = { name: 'svelte-toolbelt', license: undefined };
 		expect(licenseOf(dep({ ...toolbelt, version: '0.10.6' }))).toBe('MIT');
 		expect(allowed(dep({ ...toolbelt, version: '0.10.6' }))).toBe(true);
-		expect(allowed(dep({ ...toolbelt, version: '0.10.7' }))).toBe(false);
+		expect(allowed(dep({ ...toolbelt, version: '0.10.7' }))).toBe(true);
+		expect(allowed(dep({ ...toolbelt, version: '0.10.8' }))).toBe(false);
 		expect(
 			allowed(dep({ ...toolbelt, version: '0.10.6', licenseText: 'GNU GENERAL PUBLIC LICENSE' }))
 		).toBe(false);
