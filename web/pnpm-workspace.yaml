@@ -23,3 +23,9 @@ overrides:
   # time to validate its own options. Drop this entry when that plugin depends on zod 4.6.6
   # or later.
   zod: ^4.6.6
+  # GHSA-g3hv-75wg-m249 (medium): minimatch 7.0.0 to 11.0.0 can spend excessive CPU and
+  # memory on a crafted glob pattern, and no 10.x release has the fix. The paths to
+  # minimatch are eslint 10.14.0 (@eslint/config-array declares ^10.2.4) and
+  # @typescript-eslint/typescript-estree 8.72.1 (^10.2.2). Both run only at lint time on
+  # the repo's own patterns. Drop this entry when both depend on minimatch 11.0.1 or later.
+  minimatch: ^11.0.1
