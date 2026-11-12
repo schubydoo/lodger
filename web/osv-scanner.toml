@@ -1,0 +1,12 @@
+# OSV-Scanner exceptions for web/pnpm-lock.yaml. The OpenSSF Scorecard Vulnerabilities
+# check reads this file. Each entry needs a reason and an expiry date.
+
+[[IgnoredVulns]]
+# deepmerge 4.3.1 is the latest release, and no release has a fix. The only path to it is
+# @sveltejs/vite-plugin-svelte, which merges the repo's own Svelte config at build time.
+# No untrusted input reaches it. Dependabot alert 2 is dismissed for the same reason.
+id = "GHSA-gcqx-w48m-w2h4"
+# Scorecard pins osv-scanner v2.5.1, which reads ignoreUntil. It rejects the whole file
+# if it sees the newer key effectiveUntil.
+ignoreUntil = 2027-05-12
+reason = "deepmerge has no fixed release; only vite-plugin-svelte uses it, at build time, on the repo's own Svelte config"
