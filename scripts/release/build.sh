@@ -10,8 +10,8 @@ set -euo pipefail
 # rustup-init, pinned by version and SHA-256. The toolchain itself comes from
 # rust-toolchain.toml. Renovate bumps the version, and its postUpgradeTask
 # `python3 scripts/check_binary_dep_pins.py --fix` rewrites the hash.
-RUSTUP_VERSION=1.29.2
-RUSTUP_SHA256=5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4
+RUSTUP_VERSION=1.29.3
+RUSTUP_SHA256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
 
 [ -f web/build/200.html ] || { echo "::error::web/build is missing: build the web UI first"; exit 1; }
 
