@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       # Spell-check all text, comments included. False positives go in _typos.toml.
       - name: Typos
-        uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
+        uses: crate-ci/typos@2611abd15acb0c2e317fb9e45855aabb8b35a414 # v1.52.1
       # Lodger keeps every `unsafe` in 2 audited files: the libvirt event glue and
       # the stats call. This fails the moment `unsafe` appears anywhere else in the
       # crates. The CSP keywords 'unsafe-inline' and 'unsafe-eval' do not count: a
