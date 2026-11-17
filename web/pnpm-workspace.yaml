@@ -30,3 +30,15 @@ overrides:
   # the repo's own patterns. Drop this entry when all three depend on minimatch 11.0.1 or
   # later.
   minimatch: ^11.0.1
+
+# Advisories that `pnpm audit` skips, each with its reason. Keep the same IDs in
+# osv-scanner.toml.
+auditConfig:
+  ignoreGhsas:
+    # GHSA-fc5q-39xc-vjpf (high): picomatch 4.0.7 and earlier can backtrack for a long
+    # time on a crafted glob pattern such as +(*). 4.0.7 is the latest release, and no
+    # release has a fix. fdir, tinyglobby, vite, and vitest use picomatch only at build,
+    # lint, and test time, on the repo's own patterns. No untrusted pattern reaches it,
+    # and the browser bundle does not contain it. Drop this entry when a fixed release
+    # exists.
+    - GHSA-fc5q-39xc-vjpf

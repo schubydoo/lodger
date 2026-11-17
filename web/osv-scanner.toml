@@ -10,3 +10,11 @@ id = "GHSA-gcqx-w48m-w2h4"
 # if it sees the newer key effectiveUntil.
 ignoreUntil = 2027-05-12
 reason = "deepmerge has no fixed release; only vite-plugin-svelte uses it, at build time, on the repo's own Svelte config"
+
+[[IgnoredVulns]]
+# picomatch 4.0.7 is the latest release, and no release has a fix. fdir, tinyglobby, vite,
+# and vitest use it only at build, lint, and test time, on the repo's own glob patterns.
+# No untrusted pattern reaches it. pnpm-workspace.yaml skips the same ID in pnpm audit.
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-05-17
+reason = "picomatch has no fixed release; only build, lint, and test tools use it, on the repo's own glob patterns"
