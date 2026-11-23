@@ -41,7 +41,7 @@
 		"@tanstack/svelte-query": "6.4.1",
 		"@testing-library/jest-dom": "7.0.1",
 		"@testing-library/svelte": "5.4.2",
-		"@testing-library/user-event": "14.6.10",
+		"@testing-library/user-event": "14.6.12",
 		"@types/node": "26.6.6",
 		"@vitest/coverage-v8": "5.1.0",
 		"bits-ui": "2.21.0",
