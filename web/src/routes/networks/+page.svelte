@@ -20,9 +20,9 @@
 	<p>libvirt has no virtual networks on this host.</p>
 {:else}
 	<Table.Root label="Virtual networks">
-		<Table.Caption class="sr-only"
-			>{networks.data.length} virtual networks on this host</Table.Caption
-		>
+		<Table.Caption class="sr-only">
+			{`${networks.data.length} virtual networks on this host`}
+		</Table.Caption>
 		<Table.Header>
 			<Table.Row>
 				<Table.Head scope="col">Name</Table.Head>
