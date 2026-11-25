@@ -28,6 +28,7 @@
 	let problem = $state<unknown>(null);
 	let deleting = $state(false);
 	let typed = $state('');
+	const nameInput = $derived(`delete-${network.uuid}-name`);
 
 	function failed(e: unknown) {
 		if (e instanceof ApiError && e.status === 401) client.setQueryData(keys.session, null);
@@ -101,11 +102,9 @@
 	{/if}
 	{#if deleting}
 		<div class="flex flex-wrap items-center gap-2">
-			<label class="text-sm" for="delete-{network.uuid}-name">
-				Type {network.name} to delete it
-			</label>
+			<label class="text-sm" for={nameInput}>{`Type ${network.name} to delete it`}</label>
 			<Input
-				id="delete-{network.uuid}-name"
+				id={nameInput}
 				class="h-8 w-48"
 				{...noAutofill}
 				spellcheck={false}

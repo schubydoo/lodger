@@ -21,7 +21,7 @@
 {:else}
 	<Table.Root label="Virtual networks">
 		<Table.Caption class="sr-only">
-			{networks.data.length} virtual networks on this host
+			{`${networks.data.length} virtual networks on this host`}
 		</Table.Caption>
 		<Table.Header>
 			<Table.Row>

@@ -36,6 +36,7 @@ function show(list: Network[]) {
 describe('the networks page', () => {
 	it('lists each network with its state, bridge, and autostart, and links its page', () => {
 		show(networks);
+		expect(screen.getByText('2 virtual networks on this host')).toBeInTheDocument();
 		const rows = screen.getAllByRole('row');
 		expect(rows).toHaveLength(3);
 		const first = within(rows[1]);
