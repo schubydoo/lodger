@@ -123,9 +123,9 @@
 					<Table.Row>
 						<Table.Cell class="font-medium break-all">{volume.name}</Table.Cell>
 						<Table.Cell>{volume.format ?? '–'}</Table.Cell>
-						<Table.Cell class="text-right tabular-nums"
-							>{formatBytes(volume.capacity_bytes)}</Table.Cell
-						>
+						<Table.Cell class="text-right tabular-nums">
+							{formatBytes(volume.capacity_bytes)}
+						</Table.Cell>
 						<Table.Cell class="text-right tabular-nums">
 							{formatBytes(volume.allocation_bytes)}
 						</Table.Cell>

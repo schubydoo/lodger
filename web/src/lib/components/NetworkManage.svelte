@@ -101,9 +101,9 @@
 	{/if}
 	{#if deleting}
 		<div class="flex flex-wrap items-center gap-2">
-			<label class="text-sm" for="delete-{network.uuid}-name"
-				>Type {network.name} to delete it</label
-			>
+			<label class="text-sm" for="delete-{network.uuid}-name">
+				Type {network.name} to delete it
+			</label>
 			<Input
 				id="delete-{network.uuid}-name"
 				class="h-8 w-48"
