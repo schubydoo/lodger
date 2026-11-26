@@ -39,7 +39,7 @@
 		"@tabler/icons-svelte": "3.52.0",
 		"@tailwindcss/vite": "4.3.5",
 		"@tanstack/svelte-query": "6.4.3",
-		"@testing-library/jest-dom": "7.0.1",
+		"@testing-library/jest-dom": "8.0.0",
 		"@testing-library/svelte": "5.4.2",
 		"@testing-library/user-event": "14.6.13",
 		"@types/node": "26.6.6",
